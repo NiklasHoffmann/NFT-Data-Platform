@@ -1,0 +1,32 @@
+{
+  "name": "nft-data-platform",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "api:request": "tsx scripts/hmac-request.ts",
+    "db:init": "tsx scripts/init-db.ts",
+    "smoke:refresh": "tsx scripts/smoke-refresh-jobs.ts",
+    "smoke:fixtures": "tsx scripts/smoke-validated-fixtures.ts",
+    "smoke:reindex-erc721": "tsx scripts/smoke-reindex-erc721.ts",
+    "smoke:discover-regressions": "tsx scripts/smoke-discover-regressions.ts",
+    "dev:web": "npm run dev --workspace @nft-platform/web",
+    "dev:worker": "npm run dev --workspace @nft-platform/worker",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "dependencies": {
+    "@nft-platform/runtime": "file:packages/runtime"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3"
+  }
+}

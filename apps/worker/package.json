@@ -1,0 +1,27 @@
+{
+  "name": "@nft-platform/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nft-platform/chain": "file:../../packages/chain",
+    "@nft-platform/db": "file:../../packages/db",
+    "@nft-platform/domain": "file:../../packages/domain",
+    "@nft-platform/queue": "file:../../packages/queue",
+    "@nft-platform/runtime": "file:../../packages/runtime",
+    "@nft-platform/security": "file:../../packages/security",
+    "@nft-platform/storage": "file:../../packages/storage",
+    "bullmq": "^5.46.1",
+    "ioredis": "^5.4.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "typescript": "^5.8.3"
+  }
+}

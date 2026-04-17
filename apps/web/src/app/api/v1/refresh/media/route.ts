@@ -1,0 +1,48 @@
+import type { NextRequest } from "next/server";
+import { createJob } from "@nft-platform/db";
+import { refreshMediaJobSchema } from "@nft-platform/queue";
+import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
+import { getWebMongoDatabase } from "../../../../../lib/mongodb";
+import { enqueueRefreshMediaJob } from "../../../../../lib/queue";
+
+export const dynamic = "force-dynamic";
+
+const postHandler = withAuthenticatedRoute(["refresh:media"], async ({ auth }) => {
+  const payload = parseJsonBody(auth.bodyText);
+  const validatedPayload = refreshMediaJobSchema.parse(payload);
+  const timestamp = new Date();
+  const database = getWebMongoDatabase();
+  const queuedJob = await enqueueRefreshMediaJob(validatedPayload);
+  const jobId = await createJob(database, {
+    queueJobId: queuedJob.jobId,
+    type: "refresh-media",
+    payload: validatedPayload,
+    status: queuedJob.status,
+    attempts: queuedJob.attempts,
+    lastError: queuedJob.lastError,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  });
+
+  return Response.json(
+    {
+      ok: true,
+      jobId: jobId.toHexString(),
+      queueJobId: queuedJob.jobId,
+      status: queuedJob.status
+    },
+    { status: queuedJob.status === "queued" || queuedJob.status === "running" ? 202 : 200 }
+  );
+});
+
+function parseJsonBody(bodyText: string): unknown {
+  if (!bodyText.trim()) {
+    return {};
+  }
+
+  return JSON.parse(bodyText);
+}
+
+export async function POST(request: NextRequest): Promise<Response> {
+  return postHandler(request, undefined);
+}

@@ -1,0 +1,15 @@
+node_modules/
+.next/
+dist/
+coverage/
+.env
+.env.local
+.env.*.local
+*.log
+.minio/
+*.tsbuildinfo
+.tmp-*
+
+# Local SSH keys
+/NFT Data Platform
+/NFT Data Platform.pub
