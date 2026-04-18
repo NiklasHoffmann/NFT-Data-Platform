@@ -1205,6 +1205,38 @@ li {
   padding: 12px;
 }
 
+.collection-token-card .media-stage-card--primary {
+  gap: 0;
+}
+
+.collection-token-card .media-stage-frame {
+  border-color: rgba(145, 185, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(6, 12, 20, 0.78);
+  box-shadow: none;
+}
+
+.collection-token-card .media-stage-canvas {
+  padding: 0;
+}
+
+.collection-token-card .media-stage-media {
+  border-radius: 16px;
+}
+
+.collection-token-card .media-stage-media--image::after {
+  display: none;
+}
+
+.collection-token-card .media-stage-media--image .token-image--backdrop {
+  display: none;
+}
+
+.collection-token-card .media-stage-frame .token-image--primary,
+.collection-token-card .media-stage-frame .token-video {
+  box-shadow: none;
+}
+
 .media-viewer-panel {
   margin: 0;
   border: 1px solid var(--border);
