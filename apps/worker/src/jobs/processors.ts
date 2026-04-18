@@ -2348,6 +2348,10 @@ async function maybeBuildImageDerivatives(params: {
     return null;
   }
 
+  if (params.mimeType.split(";")[0]?.trim().toLowerCase() === "image/svg+xml") {
+    return null;
+  }
+
   try {
     return await buildImageDerivatives({
       originalBytes: params.bytes

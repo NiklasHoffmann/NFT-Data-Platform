@@ -1711,14 +1711,20 @@ function MediaPreviewGallery(props: {
   const imageAsset = mediaAssets.find((asset) => asset.kind === "image") ?? null;
   const animationAsset = mediaAssets.find((asset) => asset.kind === "animation") ?? null;
   const audioAsset = mediaAssets.find((asset) => asset.kind === "audio") ?? null;
+  const imageMimeType = imageAsset?.mimeType ?? null;
+  const prefersOriginalImageAsset = shouldPreferOriginalImageAsset({
+    mimeType: imageMimeType,
+    sourceUrl: imageAsset?.sourceUrl ?? token.imageOriginalUrl ?? null
+  });
+  const preferredImageAssetUrl = prefersOriginalImageAsset
+    ? imageAsset?.cdnUrlOriginal ?? imageAsset?.cdnUrlOptimized ?? token.imageOriginalUrl ?? null
+    : imageAsset?.cdnUrlOptimized ?? imageAsset?.cdnUrlOriginal ?? token.imageOriginalUrl ?? null;
 
   const imageUrl =
-    toBrowserSafeMediaUrl(imageAsset?.cdnUrlOptimized ?? imageAsset?.cdnUrlOriginal ?? token.imageOriginalUrl ?? null) ??
-    imageAsset?.cdnUrlOptimized ??
-    imageAsset?.cdnUrlOriginal ??
+    toBrowserSafeMediaUrl(preferredImageAssetUrl) ??
+    preferredImageAssetUrl ??
     token.imageOriginalUrl ??
     null;
-  const imageMimeType = imageAsset?.mimeType ?? null;
   const imageStatus = getDisplayMediaAssetStatus(imageAsset?.status, imageAsset?.statusDetail, {
     sourceUrl: imageAsset?.sourceUrl ?? token.imageOriginalUrl ?? null,
     renderUrl: imageUrl,
@@ -2369,6 +2375,21 @@ function inferMimeTypeFromUrl(
   }
 
   return null;
+}
+
+function shouldPreferOriginalImageAsset(params: {
+  mimeType: string | null;
+  sourceUrl: string | null;
+}): boolean {
+  const normalizedMimeType = params.mimeType?.split(";")[0]?.trim().toLowerCase() ?? null;
+
+  if (normalizedMimeType === "image/svg+xml") {
+    return true;
+  }
+
+  const inferredMimeType = inferMimeTypeFromUrl(params.sourceUrl, "image");
+
+  return inferredMimeType === "image/svg+xml";
 }
 
 function summarizeUrlForDisplay(url: string): string {
