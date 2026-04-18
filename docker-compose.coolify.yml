@@ -1,0 +1,131 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      APP_BASE_URL: ${APP_BASE_URL}
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
+      REDIS_URL: redis://redis:6379
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://minio:9000/nft-media}
+      API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY}
+      API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID}
+      API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY}
+      API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET}
+      API_BOOTSTRAP_SCOPES: ${API_BOOTSTRAP_SCOPES}
+      API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: ${API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE:-300}
+      API_BOOTSTRAP_ALLOWED_IPS: ${API_BOOTSTRAP_ALLOWED_IPS:-}
+      AUTH_MAX_TIMESTAMP_SKEW_SEC: ${AUTH_MAX_TIMESTAMP_SKEW_SEC:-300}
+    expose:
+      - "3000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
+      RPC_MAINNET_URL: ${RPC_MAINNET_URL}
+      RPC_SEPOLIA_URL: ${RPC_SEPOLIA_URL}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-nft-media}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://minio:9000/nft-media}
+      MEDIA_MAX_VIDEO_BYTES: ${MEDIA_MAX_VIDEO_BYTES:-25000000}
+      CHAIN_INDEXING_ENABLED: ${CHAIN_INDEXING_ENABLED:-false}
+      CHAIN_INDEXING_POLL_INTERVAL_MS: ${CHAIN_INDEXING_POLL_INTERVAL_MS:-30000}
+      CHAIN_INDEXING_BATCH_SIZE: ${CHAIN_INDEXING_BATCH_SIZE:-10}
+      CHAIN_INDEXING_MAX_BLOCK_RANGE: ${CHAIN_INDEXING_MAX_BLOCK_RANGE:-2000}
+      CHAIN_INDEXING_COLLECTION_ALLOWLIST: ${CHAIN_INDEXING_COLLECTION_ALLOWLIST:-}
+      API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY}
+      API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID}
+      API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY}
+      API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET}
+      API_BOOTSTRAP_SCOPES: ${API_BOOTSTRAP_SCOPES}
+      API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: ${API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE:-300}
+      API_BOOTSTRAP_ALLOWED_IPS: ${API_BOOTSTRAP_ALLOWED_IPS:-}
+
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >-
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/${S3_BUCKET:-nft-media};
+      mc anonymous set download local/${S3_BUCKET:-nft-media};
+      "
+
+volumes:
+  mongo_data:
+  redis_data:
+  minio_data:

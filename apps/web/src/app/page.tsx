@@ -19,6 +19,7 @@ import { evmAddressSchema, normalizeContractAddress, supportedChains } from "@nf
 import { ObjectId } from "mongodb";
 import { z } from "zod";
 import { serializeEnrichedCollection } from "../lib/collection-response";
+import { getWebRuntimeConfig } from "../lib/env";
 import { getWebMongoDatabase } from "../lib/mongodb";
 import { loadOperationsHealth } from "../lib/operations-health";
 import { serializeEnrichedToken } from "../lib/token-response";
@@ -30,6 +31,7 @@ import { ProgressiveCardGrid } from "./progressive-card-grid";
 const tokenScopedJobTypes = ["refresh-token", "refresh-media"] as const;
 const collectionScopedJobTypes = ["refresh-collection", "reindex-range"] as const;
 const homeViewSchema = z.enum(["nft", "collection", "jobs", "raw", "operations"]);
+const webRuntimeConfig = getWebRuntimeConfig();
 
 export const dynamic = "force-dynamic";
 
@@ -2497,9 +2499,24 @@ function isLoopbackHostname(hostname: string): boolean {
 function shouldProxyMediaUrl(url: string): boolean {
   try {
     const parsedUrl = new URL(url);
-    const normalizedHost = parsedUrl.hostname.toLowerCase();
+    const configuredMediaBase = new URL(webRuntimeConfig.mediaPublicBaseUrl);
+    const normalizedMediaBasePath = configuredMediaBase.pathname.endsWith("/")
+      ? configuredMediaBase.pathname
+      : `${configuredMediaBase.pathname}/`;
 
-    return normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1";
+    if (isLoopbackHostname(parsedUrl.hostname)) {
+      return true;
+    }
+
+    if (
+      parsedUrl.origin === configuredMediaBase.origin &&
+      (parsedUrl.pathname === configuredMediaBase.pathname ||
+        parsedUrl.pathname.startsWith(normalizedMediaBasePath))
+    ) {
+      return true;
+    }
+
+    return false;
   } catch {
     return false;
   }

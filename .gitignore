@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 .env
+.env.coolify
 .env.local
 .env.*.local
 *.log

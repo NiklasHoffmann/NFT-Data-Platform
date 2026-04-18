@@ -1,0 +1,16 @@
+.git/
+.gitignore
+node_modules/
+apps/web/.next/
+apps/web/tsconfig.tsbuildinfo
+apps/worker/tsconfig.tsbuildinfo
+dist/
+coverage/
+.env
+.env.coolify
+.env.local
+.env.*.local
+*.log
+.tmp-*
+NFT Data Platform
+NFT Data Platform.pub

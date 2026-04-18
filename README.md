@@ -79,3 +79,13 @@ Runtime notes:
 - `smoke:refresh` requires both the web app and worker to be running locally.
 - `npm run smoke:discover-regressions` exercises the current regression matrix for known edge-case collections and tokens, including partial-media and ERC-1155 fallback cases.
 - `npm run smoke:reindex-erc721` deletes the local ERC-721 ownership snapshot for a bounded Panini mainnet fixture, runs a `reindex-range` processor pass, and verifies that the owner record is rebuilt from chain history.
+
+## Coolify demo deploy
+
+- Use `docker-compose.coolify.yml` for the first server deploy instead of the local-only `docker-compose.yml`.
+- Fill your server secrets into `.env.coolify.example` and copy them into Coolify's environment UI.
+- The Coolify stack is intentionally split into `web`, `worker`, `mongo`, `redis`, `minio`, and `minio-init`.
+- Only `web` should receive a public domain. `worker`, `mongo`, `redis`, and `minio` should stay internal for the first demo deployment.
+- Keep `S3_PUBLIC_BASE_URL=http://minio:9000/nft-media` for the first deploy. The web app now proxies all media URLs that belong to the configured media base through `/api/media`, so browsers do not need direct access to the internal MinIO host.
+- Leave `CHAIN_INDEXING_ENABLED=false` for the first presentation deploy unless you explicitly want background indexing running on the server.
+- The web service listens on port `3000`. In Coolify, attach your domain to the `web` service and route traffic to port `3000`.
