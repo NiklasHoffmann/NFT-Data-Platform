@@ -15,7 +15,7 @@ import {
   serializeTokenDocument,
   type TokenDocument
 } from "@nft-platform/db";
-import { evmAddressSchema, normalizeContractAddress, supportedChains } from "@nft-platform/domain";
+import { evmAddressSchema, evmTokenIdSchema, normalizeContractAddress, supportedChains } from "@nft-platform/domain";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
 import { serializeEnrichedCollection } from "../lib/collection-response";
@@ -38,7 +38,7 @@ export const dynamic = "force-dynamic";
 const homeQuerySchema = z.object({
   chainId: z.coerce.number().int().positive().optional(),
   contractAddress: evmAddressSchema.optional(),
-  tokenId: z.string().trim().min(1).optional(),
+  tokenId: evmTokenIdSchema.optional(),
   view: homeViewSchema.optional(),
   status: z.enum(["loaded", "queued", "invalid", "not-found", "unresolved", "failed"]).optional(),
   message: z.string().trim().min(1).optional()

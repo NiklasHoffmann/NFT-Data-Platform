@@ -389,19 +389,24 @@ async function handleRefreshToken(
       })
     : null;
 
-  if (collection.standard === "erc721" && !existingToken && !onChainToken.ownerAddress) {
+  if (collection.standard === "erc721" && !onChainToken.ownerAddress) {
+    await removeMissingTokenFromReadModel({
+      collection,
+      existingToken,
+      context,
+      updatedAt: now
+    });
+
     throw new Error("Token not found on chain.");
   }
 
   if (collection.standard === "erc1155" && erc1155TokenExists !== true) {
-    if (existingToken) {
-      await deleteTokenAndDependents({
-        database: context.database,
-        chainId: payload.chainId,
-        contractAddress: payload.contractAddress,
-        tokenId: payload.tokenId
-      });
-    }
+    await removeMissingTokenFromReadModel({
+      collection,
+      existingToken,
+      context,
+      updatedAt: now
+    });
 
     throw new Error("Token not found on chain.");
   }
@@ -595,6 +600,72 @@ async function handleRefreshToken(
     metadataUriResolved: onChainToken.metadataUriResolved,
     metadataError
   };
+}
+
+async function removeMissingTokenFromReadModel(params: {
+  collection: CollectionDocument;
+  existingToken: Awaited<ReturnType<typeof findTokenByIdentity>>;
+  context: JobProcessingContext;
+  updatedAt: Date;
+}): Promise<void> {
+  if (!params.existingToken) {
+    return;
+  }
+
+  await deleteTokenAndDependents({
+    database: params.context.database,
+    chainId: params.existingToken.chainId,
+    contractAddress: params.existingToken.contractAddress,
+    tokenId: params.existingToken.tokenId
+  });
+
+  const collectionTokenCounts = await countTokensForCollections({
+    database: params.context.database,
+    collections: [
+      {
+        chainId: params.collection.chainId,
+        contractAddress: params.collection.contractAddress
+      }
+    ]
+  });
+
+  await upsertCollection(params.context.database, {
+    chainId: params.collection.chainId,
+    contractAddress: params.collection.contractAddress,
+    standard: params.collection.standard,
+    name: params.collection.name,
+    symbol: params.collection.symbol,
+    baseUri: params.collection.baseUri,
+    contractUriRaw: params.collection.contractUriRaw,
+    contractUriResolved: params.collection.contractUriResolved,
+    creatorName: params.collection.creatorName,
+    creatorAddress: params.collection.creatorAddress,
+    contractOwnerAddress: params.collection.contractOwnerAddress,
+    royaltyRecipientAddress: params.collection.royaltyRecipientAddress,
+    royaltyBasisPoints: params.collection.royaltyBasisPoints,
+    collectionMetadataPayload: params.collection.collectionMetadataPayload,
+    collectionMetadataHash: params.collection.collectionMetadataHash,
+    lastCollectionMetadataFetchAt: params.collection.lastCollectionMetadataFetchAt,
+    lastCollectionMetadataError: params.collection.lastCollectionMetadataError,
+    description: params.collection.description,
+    externalUrl: params.collection.externalUrl,
+    imageOriginalUrl: params.collection.imageOriginalUrl,
+    bannerImageOriginalUrl: params.collection.bannerImageOriginalUrl,
+    featuredImageOriginalUrl: params.collection.featuredImageOriginalUrl,
+    animationOriginalUrl: params.collection.animationOriginalUrl,
+    audioOriginalUrl: params.collection.audioOriginalUrl,
+    interactiveOriginalUrl: params.collection.interactiveOriginalUrl,
+    totalSupply: params.collection.totalSupply,
+    indexedTokenCount:
+      collectionTokenCounts.get(`${params.collection.chainId}:${params.collection.contractAddress}`) ?? 0,
+    deployBlock: params.collection.deployBlock,
+    lastObservedBlock: params.collection.lastObservedBlock,
+    lastIndexedBlock: params.collection.lastIndexedBlock,
+    syncStatus: params.collection.syncStatus,
+    lastSyncAt: params.updatedAt,
+    createdAt: params.collection.createdAt,
+    updatedAt: params.updatedAt
+  });
 }
 
 async function materializeErc1155BalancesForToken(params: {

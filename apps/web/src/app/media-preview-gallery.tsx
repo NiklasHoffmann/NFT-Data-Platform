@@ -56,6 +56,8 @@ export function InteractiveMediaPreviewGallery(props: {
   const selectableItems = activeItem
     ? availableItems.filter((item) => item.id !== activeItem.id)
     : availableItems;
+  const activeStageKind = activeItem?.stage?.kind ?? null;
+  const usesFlushVisualFrame = activeStageKind === "image" || activeStageKind === "video" || activeStageKind === "interactive";
 
   if (!activeItem) {
     return (
@@ -76,8 +78,8 @@ export function InteractiveMediaPreviewGallery(props: {
     <div className="media-gallery media-gallery--switcher">
       <div className="media-stage media-stage--primary">
         <div className="media-stage-card media-stage-card--primary">
-          <div className="media-stage-frame">
-            <div className="media-stage-canvas">
+          <div className={`media-stage-frame${usesFlushVisualFrame ? " media-stage-frame--visual" : ""}`}>
+            <div className={`media-stage-canvas${usesFlushVisualFrame ? " media-stage-canvas--visual" : ""}`}>
               {renderStage(activeItem, props.subjectName, props.subjectId, props.subjectLabel)}
             </div>
           </div>

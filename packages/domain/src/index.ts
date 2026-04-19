@@ -62,12 +62,18 @@ export const evmAddressSchema = z
   .trim()
   .regex(/^0x[a-fA-F0-9]{40}$/, "Expected a valid EVM address.");
 
+export const evmTokenIdSchema = z
+  .string()
+  .trim()
+  .regex(/^(0|[1-9]\d*)$/, "Expected a non-negative integer token id.")
+  .transform((value) => normalizeTokenId(value));
+
 export const walletAddressSchema = evmAddressSchema;
 
 export const tokenIdentitySchema = z.object({
   chainId: z.number().int().positive(),
   contractAddress: evmAddressSchema,
-  tokenId: z.string().min(1)
+  tokenId: evmTokenIdSchema
 });
 
 export type TokenIdentity = z.infer<typeof tokenIdentitySchema>;
@@ -254,6 +260,10 @@ export type AuditLogRecord = z.infer<typeof auditLogRecordSchema>;
 
 export function normalizeAddress(address: string): string {
   return address.trim().toLowerCase();
+}
+
+export function normalizeTokenId(tokenId: string): string {
+  return BigInt(tokenId.trim()).toString();
 }
 
 export function normalizeContractAddress(address: string): string {

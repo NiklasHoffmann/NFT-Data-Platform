@@ -1,7 +1,7 @@
 "use server";
 
 import { createJob, findCollectionByIdentity, findJobByQueueJobId, findTokenByIdentity } from "@nft-platform/db";
-import { evmAddressSchema, normalizeContractAddress } from "@nft-platform/domain";
+import { evmAddressSchema, evmTokenIdSchema, normalizeContractAddress } from "@nft-platform/domain";
 import { refreshCollectionJobSchema, refreshTokenJobSchema } from "@nft-platform/queue";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -13,7 +13,7 @@ type DiscoverStatus = "loaded" | "queued" | "invalid" | "not-found" | "unresolve
 const discoverTokenFormSchema = z.object({
   chainId: z.coerce.number().int().positive(),
   contractAddress: evmAddressSchema,
-  tokenId: z.string().trim().optional().transform((value) => value ?? "")
+  tokenId: z.union([evmTokenIdSchema, z.literal("")]).optional().transform((value) => value ?? "")
 });
 
 export async function discoverTokenAction(formData: FormData): Promise<void> {

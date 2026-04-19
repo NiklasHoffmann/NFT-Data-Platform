@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { nftStandardSchema } from "@nft-platform/domain";
+import { evmTokenIdSchema, nftStandardSchema } from "@nft-platform/domain";
 import { z } from "zod";
 
 export const queueNames = {
@@ -14,7 +14,7 @@ export type QueueName = (typeof queueNames)[keyof typeof queueNames];
 export const refreshTokenJobSchema = z.object({
   chainId: z.number().int().positive(),
   contractAddress: z.string().min(1),
-  tokenId: z.string().min(1),
+  tokenId: evmTokenIdSchema,
   forceMetadata: z.boolean().default(false),
   forceOwnership: z.boolean().default(false)
 });
@@ -24,7 +24,7 @@ export type RefreshTokenJob = z.infer<typeof refreshTokenJobSchema>;
 export const refreshCollectionJobSchema = z.object({
   chainId: z.number().int().positive(),
   contractAddress: z.string().min(1),
-  tokenIdHint: z.string().min(1).optional(),
+  tokenIdHint: evmTokenIdSchema.optional(),
   standard: nftStandardSchema.optional(),
   fullRescan: z.boolean().default(false)
 });
@@ -34,7 +34,7 @@ export type RefreshCollectionJob = z.infer<typeof refreshCollectionJobSchema>;
 export const refreshMediaJobSchema = z.object({
   chainId: z.number().int().positive(),
   contractAddress: z.string().min(1),
-  tokenId: z.string().min(1),
+  tokenId: evmTokenIdSchema,
   forceDownload: z.boolean().default(false)
 });
 
