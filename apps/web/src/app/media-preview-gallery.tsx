@@ -140,16 +140,29 @@ function ImageStage(props: {
   title: string;
 }) {
   const imageUrl = props.item.stage?.url ?? null;
-  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">("loading");
+  const [loadState, setLoadState] = useState<"loading" | "retrying" | "loaded" | "error">("loading");
+  const [retryCount, setRetryCount] = useState(0);
+  const [retryNonce, setRetryNonce] = useState(0);
   const previousImageUrlRef = useRef<string | null>(imageUrl);
   const imageElementRef = useRef<HTMLImageElement | null>(null);
+  const isTransientStatus = props.item.status === "pending" || props.item.status === "processing";
+  const shouldRetryTransientFailure = isTransientStatus || isMediaProxyUrl(imageUrl);
+  const resolvedImageUrl = buildRetryableImageUrl(imageUrl, retryNonce);
 
   useEffect(() => {
     if (previousImageUrlRef.current !== imageUrl) {
       previousImageUrlRef.current = imageUrl;
       setLoadState("loading");
+      setRetryCount(0);
+      setRetryNonce(0);
     }
   }, [imageUrl]);
+
+  useEffect(() => {
+    setLoadState("loading");
+    setRetryCount(0);
+    setRetryNonce(0);
+  }, [props.item.status]);
 
   useEffect(() => {
     const imageElement = imageElementRef.current;
@@ -159,11 +172,30 @@ function ImageStage(props: {
     }
 
     setLoadState(imageElement.naturalWidth > 0 ? "loaded" : "error");
-  }, [imageUrl]);
+  }, [resolvedImageUrl]);
+
+  useEffect(() => {
+    if (loadState !== "retrying") {
+      return;
+    }
+
+    const retryDelayMs = retryCount === 0 ? 900 : Math.min(900 * (retryCount + 1), 2600);
+    const timer = window.setTimeout(() => {
+      setRetryNonce((current) => current + 1);
+      setRetryCount((current) => current + 1);
+      setLoadState("loading");
+    }, retryDelayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [loadState, retryCount]);
 
   if (!props.item.stage || props.item.stage.kind !== "image") {
     return null;
   }
+
+  const canRetry = shouldRetryTransientFailure && retryCount < 3;
 
   if (loadState === "error") {
     const reason = props.item.stage.mimeType && !props.item.stage.mimeType.startsWith("image/")
@@ -179,11 +211,14 @@ function ImageStage(props: {
   }
 
   return (
-    <div className={`media-stage-media media-stage-media--image ${loadState === "loaded" ? "is-loaded" : "is-loading"}`} aria-busy={loadState === "loading"}>
+    <div
+      className={`media-stage-media media-stage-media--image ${loadState === "loaded" ? "is-loaded" : "is-loading"}`}
+      aria-busy={loadState === "loading" || loadState === "retrying"}
+    >
       {loadState === "loaded" ? (
         <img
           className="token-image token-image--backdrop"
-          src={props.item.stage.url}
+          src={resolvedImageUrl}
           alt=""
           aria-hidden
           loading="eager"
@@ -192,20 +227,56 @@ function ImageStage(props: {
       <img
         ref={imageElementRef}
         className={`token-image token-image--primary ${loadState === "loaded" ? "" : "token-image--pending"}`.trim()}
-        src={props.item.stage.url}
+        src={resolvedImageUrl}
         alt={props.title}
         loading={props.item.id === "image" || props.item.id === "animation" ? "eager" : "lazy"}
         onLoad={() => setLoadState("loaded")}
-        onError={() => setLoadState("error")}
+        onError={() => setLoadState(canRetry ? "retrying" : "error")}
       />
-      {loadState === "loading" ? (
+      {loadState === "loading" || loadState === "retrying" ? (
         <div className="media-stage-loading" role="status" aria-live="polite">
           <span className="media-stage-spinner" aria-hidden="true" />
-          <p>Loading image preview...</p>
+          <p>
+            {loadState === "retrying"
+              ? `Waiting for image preview${retryCount > 0 ? ` (retry ${retryCount + 1}/4)` : ""}...`
+              : "Loading image preview..."}
+          </p>
         </div>
       ) : null}
     </div>
   );
+}
+
+function isMediaProxyUrl(url: string | null): boolean {
+  if (!url) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = url.startsWith("http://") || url.startsWith("https://") ? new URL(url) : new URL(url, "http://localhost");
+    return parsedUrl.pathname === "/api/media";
+  } catch {
+    return false;
+  }
+}
+
+function buildRetryableImageUrl(url: string | null, retryNonce: number): string {
+  if (!url || retryNonce <= 0) {
+    return url ?? "";
+  }
+
+  try {
+    const parsedUrl = url.startsWith("http://") || url.startsWith("https://") ? new URL(url) : new URL(url, "http://localhost");
+    parsedUrl.searchParams.set("_retry", String(retryNonce));
+
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return parsedUrl.toString();
+    }
+
+    return `${parsedUrl.pathname}${parsedUrl.search}`;
+  } catch {
+    return url;
+  }
 }
 
 function UnknownStage(props: {
