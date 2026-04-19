@@ -317,6 +317,10 @@ li {
 }
 
 .discover-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   min-height: 46px;
   padding: 0 20px;
   border: 0;
@@ -326,6 +330,32 @@ li {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+  transition: transform 140ms ease, filter 140ms ease, opacity 140ms ease;
+}
+
+.discover-button:hover {
+  transform: translateY(-1px);
+  filter: saturate(1.05) brightness(1.02);
+}
+
+.discover-button:disabled {
+  cursor: progress;
+  transform: none;
+  filter: saturate(0.84) brightness(0.94);
+  opacity: 0.92;
+}
+
+.discover-button--pending {
+  box-shadow: 0 0 0 1px rgba(4, 16, 24, 0.08), 0 12px 28px rgba(113, 227, 177, 0.18);
+}
+
+.discover-button__spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(4, 16, 24, 0.18);
+  border-top-color: rgba(4, 16, 24, 0.9);
+  border-radius: 999px;
+  animation: media-stage-spin 800ms linear infinite;
 }
 
 .banner-copy {

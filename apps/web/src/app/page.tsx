@@ -25,6 +25,7 @@ import { loadOperationsHealth } from "../lib/operations-health";
 import { serializeEnrichedToken } from "../lib/token-response";
 import { DiscoverLiveRefresh } from "./discover-live-refresh";
 import { discoverTokenAction } from "./discover-actions";
+import { DiscoverSubmitButton } from "./discover-submit-button";
 import { InteractiveMediaPreviewGallery, type MediaGalleryItem, type MediaActionLink } from "./media-preview-gallery";
 import { ProgressiveCardGrid } from "./progressive-card-grid";
 
@@ -403,9 +404,7 @@ export default async function HomePage(props: {
               <input name="tokenId" type="text" placeholder="359 (optional)" defaultValue={initialTokenId} />
             </label>
 
-            <button type="submit" className="discover-button">
-              Discover
-            </button>
+            <DiscoverSubmitButton />
           </form>
 
           <p className="banner-copy">{bannerMessage ?? "Use the fields above to load a collection or token."}</p>
