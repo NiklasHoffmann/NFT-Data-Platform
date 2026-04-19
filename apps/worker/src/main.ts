@@ -26,27 +26,31 @@ async function bootstrap(): Promise<void> {
     appName: "nft-platform-worker"
   });
 
-  if (
-    config.bootstrapClientId &&
-    config.bootstrapApiKey &&
-    config.bootstrapApiSecret &&
-    config.apiClientSecretEncryptionKey
-  ) {
-    await initializePlatformDatabase({
-      database,
-      bootstrapApiClient: {
-        clientId: config.bootstrapClientId,
-        clientName: config.bootstrapClientId,
-        apiKey: config.bootstrapApiKey,
-        apiSecret: config.bootstrapApiSecret,
-        scopes: config.bootstrapScopes,
-        rateLimitPerMinute: config.bootstrapRateLimitPerMinute,
-        allowedIps: config.bootstrapAllowedIps,
-        encryptionKey: config.apiClientSecretEncryptionKey
-      }
-    });
+  if (config.nodeEnv !== "production") {
+    if (
+      config.bootstrapClientId &&
+      config.bootstrapApiKey &&
+      config.bootstrapApiSecret &&
+      config.apiClientSecretEncryptionKey
+    ) {
+      await initializePlatformDatabase({
+        database,
+        bootstrapApiClient: {
+          clientId: config.bootstrapClientId,
+          clientName: config.bootstrapClientId,
+          apiKey: config.bootstrapApiKey,
+          apiSecret: config.bootstrapApiSecret,
+          scopes: config.bootstrapScopes,
+          rateLimitPerMinute: config.bootstrapRateLimitPerMinute,
+          allowedIps: config.bootstrapAllowedIps,
+          encryptionKey: config.apiClientSecretEncryptionKey
+        }
+      });
+    } else {
+      await initializePlatformDatabase({ database });
+    }
   } else {
-    await initializePlatformDatabase({ database });
+    console.log("[worker] skipping database bootstrap in production; run npm run db:init separately for validators, indexes, and bootstrap API client sync.");
   }
 
   const connection = new IORedis(config.redisUrl, {
