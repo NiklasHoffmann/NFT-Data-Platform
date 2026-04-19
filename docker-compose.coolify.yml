@@ -94,7 +94,7 @@ services:
       MONGODB_APP_USERNAME: ${MONGODB_APP_USERNAME}
       MONGODB_APP_PASSWORD: ${MONGODB_APP_PASSWORD}
     volumes:
-      - mongo_data:/data/db
+      - mongo_auth_data:/data/db
       - ./docker/mongo-init/01-app-user.js:/docker-entrypoint-initdb.d/01-app-user.js:ro
     healthcheck:
       test:
@@ -110,6 +110,7 @@ services:
           "--eval",
           "db.adminCommand('ping')"
         ]
+      start_period: 60s
       interval: 10s
       timeout: 5s
       retries: 5
@@ -163,7 +164,7 @@ services:
       - backend
 
 volumes:
-  mongo_data:
+  mongo_auth_data:
   redis_data:
   minio_data:
 
