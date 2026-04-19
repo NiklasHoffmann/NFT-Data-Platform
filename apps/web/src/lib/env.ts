@@ -14,6 +14,11 @@ const webRuntimeConfigSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   S3_PUBLIC_BASE_URL: z.string().url().default("http://localhost:9000/nft-media"),
+  S3_ENDPOINT: z.string().url().default("http://localhost:9000"),
+  S3_REGION: z.string().min(1).default("us-east-1"),
+  S3_ACCESS_KEY: z.string().default(""),
+  S3_SECRET_KEY: z.string().default(""),
+  S3_BUCKET: z.string().min(1).default("nft-media"),
   MONGODB_URI: z.string().min(1).default("mongodb://localhost:27017"),
   MONGODB_DATABASE: z.string().min(1).default("nft_data_platform"),
   REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
@@ -61,6 +66,11 @@ export type WebRuntimeConfig = {
   nodeEnv: "development" | "test" | "production";
   appBaseUrl: string;
   mediaPublicBaseUrl: string;
+  storageEndpoint: string;
+  storageRegion: string;
+  storageAccessKey: string;
+  storageSecretKey: string;
+  storageBucket: string;
   mongodbUri: string;
   mongodbDatabase: string;
   redisUrl: string;
@@ -81,6 +91,11 @@ export function getWebRuntimeConfig(): WebRuntimeConfig {
     nodeEnv: parsed.NODE_ENV,
     appBaseUrl: parsed.APP_BASE_URL,
     mediaPublicBaseUrl: parsed.S3_PUBLIC_BASE_URL,
+    storageEndpoint: parsed.S3_ENDPOINT,
+    storageRegion: parsed.S3_REGION,
+    storageAccessKey: parsed.S3_ACCESS_KEY,
+    storageSecretKey: parsed.S3_SECRET_KEY,
+    storageBucket: parsed.S3_BUCKET,
     mongodbUri: parsed.MONGODB_URI,
     mongodbDatabase: parsed.MONGODB_DATABASE,
     redisUrl: parsed.REDIS_URL,

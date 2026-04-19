@@ -86,6 +86,9 @@ Runtime notes:
 - Fill your server secrets into `.env.coolify.example` and copy them into Coolify's environment UI.
 - The Coolify stack is intentionally split into `web`, `worker`, `mongo`, `redis`, `minio`, and `minio-init`.
 - Only `web` should receive a public domain. `worker`, `mongo`, `redis`, and `minio` should stay internal for the first demo deployment.
-- Keep `S3_PUBLIC_BASE_URL=http://minio:9000/nft-media` for the first deploy. The web app now proxies all media URLs that belong to the configured media base through `/api/media`, so browsers do not need direct access to the internal MinIO host.
+- Keep `S3_PUBLIC_BASE_URL=http://minio:9000/nft-media` for the first deploy. The web app now reads those media objects through the configured S3 credentials and proxies them back through `/api/media`, so the MinIO bucket no longer needs anonymous download access.
+- Set dedicated credentials for `MONGODB_ROOT_USERNAME`, `MONGODB_ROOT_PASSWORD`, `MONGODB_APP_USERNAME`, `MONGODB_APP_PASSWORD`, and `REDIS_PASSWORD` in Coolify. The compose stack now enables MongoDB auth, creates an application user during first initialization, and protects Redis with a password.
+- Use URL-safe values for those MongoDB and Redis credentials because the compose file builds connection URIs from them. Stick to letters, numbers, `-`, `_`, and `.` unless you explicitly percent-encode the values yourself.
+- If your existing Coolify MongoDB volume was initialized before auth was enabled, redeploying with the new secured stack may require a fresh MongoDB volume or a manual one-time user migration. The `docker-entrypoint-initdb.d` script only creates the app user on first initialization.
 - Leave `CHAIN_INDEXING_ENABLED=false` for the first presentation deploy unless you explicitly want background indexing running on the server.
 - The web service listens on port `3000`. In Coolify, attach your domain to the `web` service and route traffic to port `3000`.

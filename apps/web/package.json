@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.896.0",
     "@nft-platform/db": "file:../../packages/db",
     "@nft-platform/domain": "file:../../packages/domain",
     "@nft-platform/queue": "file:../../packages/queue",
