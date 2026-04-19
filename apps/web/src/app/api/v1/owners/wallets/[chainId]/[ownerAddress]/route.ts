@@ -9,6 +9,7 @@ import {
 } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../../../../lib/cursor-pagination";
 import { getWebMongoDatabase } from "../../../../../../../lib/mongodb";
@@ -69,7 +70,7 @@ type WalletOwnersRouteContext = {
 
 const getHandler = withAuthenticatedRoute<WalletOwnersRouteContext>(["owners:read"], async ({ context, request }) => {
   const params = await context.params;
-  const parsedQuery = ownerInventoryQuerySchema.parse({
+  const parsedQueryResult = ownerInventoryQuerySchema.safeParse({
     q: request.nextUrl.searchParams.get("q") ?? undefined,
     standard: request.nextUrl.searchParams.get("standard") ?? undefined,
     contractAddress: request.nextUrl.searchParams.get("contractAddress") ?? undefined,
@@ -80,6 +81,15 @@ const getHandler = withAuthenticatedRoute<WalletOwnersRouteContext>(["owners:rea
     cursor: request.nextUrl.searchParams.get("cursor") ?? undefined,
     limit: request.nextUrl.searchParams.get("limit") ?? undefined
   });
+
+  if (!parsedQueryResult.success) {
+    return buildValidationErrorResponse({
+      error: "invalid_owner_inventory_query",
+      issues: buildValidationIssues(parsedQueryResult.error)
+    });
+  }
+
+  const parsedQuery = parsedQueryResult.data;
   const chainId = Number(params.chainId);
 
   if (!Number.isInteger(chainId) || chainId <= 0) {
@@ -153,7 +163,13 @@ const getHandler = withAuthenticatedRoute<WalletOwnersRouteContext>(["owners:rea
   }
 
   if (parsedQuery.cursor) {
-    listParams.cursor = decodeUpdatedAtCursor(parsedQuery.cursor);
+    const cursorResult = safeDecodeUpdatedAtCursor(parsedQuery.cursor);
+
+    if (!cursorResult.ok) {
+      return cursorResult.response;
+    }
+
+    listParams.cursor = cursorResult.value;
   }
 
   const [erc721Ownership, erc1155Balances] = await Promise.all([

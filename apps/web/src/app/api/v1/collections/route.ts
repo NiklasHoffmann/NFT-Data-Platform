@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ObjectId } from "mongodb";
 import { listCollections } from "@nft-platform/db";
+import { safeDecodeUpdatedAtCursor } from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../lib/cursor-pagination";
@@ -36,7 +37,13 @@ const getHandler = withAuthenticatedRoute(["collections:read"], async ({ request
   };
 
   if (parsedQuery.cursor) {
-    collectionListParams.cursor = decodeUpdatedAtCursor(parsedQuery.cursor);
+    const cursorResult = safeDecodeUpdatedAtCursor(parsedQuery.cursor);
+
+    if (!cursorResult.ok) {
+      return cursorResult.response;
+    }
+
+    collectionListParams.cursor = cursorResult.value;
   }
 
   const collections = await listCollections({

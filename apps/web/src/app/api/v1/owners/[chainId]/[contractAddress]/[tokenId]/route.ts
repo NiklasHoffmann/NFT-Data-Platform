@@ -8,6 +8,7 @@ import {
 } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../../../../lib/cursor-pagination";
 import { getWebMongoDatabase } from "../../../../../../../lib/mongodb";
@@ -25,10 +26,19 @@ type TokenOwnersRouteContext = {
 
 const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read"], async ({ context, request }) => {
   const params = await context.params;
-  const parsedQuery = holderListQuerySchema.parse({
+  const parsedQueryResult = holderListQuerySchema.safeParse({
     cursor: request.nextUrl.searchParams.get("cursor") ?? undefined,
     limit: request.nextUrl.searchParams.get("limit") ?? undefined
   });
+
+  if (!parsedQueryResult.success) {
+    return buildValidationErrorResponse({
+      error: "invalid_holder_list_query",
+      issues: buildValidationIssues(parsedQueryResult.error)
+    });
+  }
+
+  const parsedQuery = parsedQueryResult.data;
   const chainId = Number(params.chainId);
 
   if (!Number.isInteger(chainId) || chainId <= 0) {
@@ -110,7 +120,13 @@ const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read
   };
 
   if (parsedQuery.cursor) {
-    listParams.cursor = decodeUpdatedAtCursor(parsedQuery.cursor);
+    const cursorResult = safeDecodeUpdatedAtCursor(parsedQuery.cursor);
+
+    if (!cursorResult.ok) {
+      return cursorResult.response;
+    }
+
+    listParams.cursor = cursorResult.value;
   }
 
   const balances = await listErc1155Balances(listParams);

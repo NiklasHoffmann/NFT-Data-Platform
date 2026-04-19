@@ -3,13 +3,28 @@ import { createJob } from "@nft-platform/db";
 import { refreshTokenJobSchema } from "@nft-platform/queue";
 import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
+import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../../lib/api-validation";
 import { enqueueRefreshTokenJob } from "../../../../../lib/queue";
 
 export const dynamic = "force-dynamic";
 
 const postHandler = withAuthenticatedRoute(["refresh:token"], async ({ auth }) => {
-  const payload = parseJsonBody(auth.bodyText);
-  const validatedPayload = refreshTokenJobSchema.parse(payload);
+  const parsedBody = safeParseJsonRequestBody(auth.bodyText);
+
+  if (!parsedBody.ok) {
+    return parsedBody.response;
+  }
+
+  const validatedPayloadResult = refreshTokenJobSchema.safeParse(parsedBody.data);
+
+  if (!validatedPayloadResult.success) {
+    return buildValidationErrorResponse({
+      error: "invalid_refresh_token_request",
+      issues: buildValidationIssues(validatedPayloadResult.error)
+    });
+  }
+
+  const validatedPayload = validatedPayloadResult.data;
   const timestamp = new Date();
   const database = getWebMongoDatabase();
   const queuedJob = await enqueueRefreshTokenJob(validatedPayload);
@@ -34,14 +49,6 @@ const postHandler = withAuthenticatedRoute(["refresh:token"], async ({ auth }) =
     { status: queuedJob.status === "queued" || queuedJob.status === "running" ? 202 : 200 }
   );
 });
-
-function parseJsonBody(bodyText: string): unknown {
-  if (!bodyText.trim()) {
-    return {};
-  }
-
-  return JSON.parse(bodyText);
-}
 
 export async function POST(request: NextRequest): Promise<Response> {
   return postHandler(request, undefined);

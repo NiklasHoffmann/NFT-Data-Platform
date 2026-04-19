@@ -3,6 +3,7 @@ import { mediaStatusSchema, metadataStatusSchema } from "@nft-platform/domain";
 import { listTokens } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../lib/cursor-pagination";
@@ -22,7 +23,7 @@ const tokenListQuerySchema = z.object({
 });
 
 const getHandler = withAuthenticatedRoute(["tokens:read"], async ({ request }) => {
-  const parsedQuery = tokenListQuerySchema.parse({
+  const parsedQueryResult = tokenListQuerySchema.safeParse({
     chainId: request.nextUrl.searchParams.get("chainId") ?? undefined,
     contractAddress: request.nextUrl.searchParams.get("contractAddress") ?? undefined,
     metadataStatus: request.nextUrl.searchParams.get("metadataStatus") ?? undefined,
@@ -32,6 +33,15 @@ const getHandler = withAuthenticatedRoute(["tokens:read"], async ({ request }) =
     cursor: request.nextUrl.searchParams.get("cursor") ?? undefined,
     limit: request.nextUrl.searchParams.get("limit") ?? undefined
   });
+
+  if (!parsedQueryResult.success) {
+    return buildValidationErrorResponse({
+      error: "invalid_token_list_query",
+      issues: buildValidationIssues(parsedQueryResult.error)
+    });
+  }
+
+  const parsedQuery = parsedQueryResult.data;
   const database = getWebMongoDatabase();
   const tokenListParams: {
     database: ReturnType<typeof getWebMongoDatabase>;
@@ -78,7 +88,13 @@ const getHandler = withAuthenticatedRoute(["tokens:read"], async ({ request }) =
   }
 
   if (parsedQuery.cursor) {
-    tokenListParams.cursor = decodeUpdatedAtCursor(parsedQuery.cursor);
+    const cursorResult = safeDecodeUpdatedAtCursor(parsedQuery.cursor);
+
+    if (!cursorResult.ok) {
+      return cursorResult.response;
+    }
+
+    tokenListParams.cursor = cursorResult.value;
   }
 
   const tokens = await listTokens(tokenListParams);

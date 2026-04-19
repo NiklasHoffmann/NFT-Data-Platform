@@ -3,6 +3,8 @@ import { getWebRuntimeConfig } from "../../../lib/env";
 
 export const dynamic = "force-dynamic";
 
+const mediaProxyTimeoutMs = 15_000;
+
 const passthroughHeaders = [
   "content-type",
   "content-length",
@@ -29,10 +31,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   const upstream = await fetch(targetUrl, {
     method: "GET",
     headers: buildUpstreamHeaders(request),
-    redirect: "follow"
-  }).catch(() => null);
+    redirect: "follow",
+    signal: AbortSignal.timeout(mediaProxyTimeoutMs)
+  }).catch((error) => error);
 
-  if (!upstream) {
+  if (upstream instanceof Error) {
+    if (upstream.name === "TimeoutError" || upstream.name === "AbortError") {
+      return Response.json({ error: "Media proxy upstream timed out." }, { status: 504 });
+    }
+
     return Response.json({ error: "Media proxy request failed." }, { status: 502 });
   }
 

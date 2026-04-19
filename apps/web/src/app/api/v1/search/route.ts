@@ -3,6 +3,7 @@ import { mediaStatusSchema, metadataStatusSchema } from "@nft-platform/domain";
 import { listCollections, listTokens } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import { safeDecodeUpdatedAtCursor } from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../lib/cursor-pagination";
@@ -103,7 +104,13 @@ const getHandler = withAuthenticatedRoute(["search:read"], async ({ request }) =
 
   const parsedQuery = parsedQueryResult.data;
   const database = getWebMongoDatabase();
-  const cursor = parsedQuery.cursor ? decodeUpdatedAtCursor(parsedQuery.cursor) : undefined;
+  const cursorResult = parsedQuery.cursor ? safeDecodeUpdatedAtCursor(parsedQuery.cursor) : null;
+
+  if (cursorResult && !cursorResult.ok) {
+    return cursorResult.response;
+  }
+
+  const cursor = cursorResult?.value;
 
   const collectionSearchParams: {
     database: ReturnType<typeof getWebMongoDatabase>;

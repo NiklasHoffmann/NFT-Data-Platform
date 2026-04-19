@@ -29,6 +29,36 @@ const workerRuntimeConfigSchema = z.object({
   API_BOOTSTRAP_SCOPES: z.string().default(""),
   API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(300),
   API_BOOTSTRAP_ALLOWED_IPS: z.string().default("")
+}).superRefine((value, context) => {
+  const hasAnyBootstrapCredential = Boolean(
+    value.API_BOOTSTRAP_CLIENT_ID.trim() || value.API_BOOTSTRAP_KEY.trim() || value.API_BOOTSTRAP_SECRET.trim()
+  );
+
+  if (value.API_CLIENT_SECRET_ENCRYPTION_KEY.trim() && !looksLikeValidEncryptionKey(value.API_CLIENT_SECRET_ENCRYPTION_KEY)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["API_CLIENT_SECRET_ENCRYPTION_KEY"],
+      message: "API_CLIENT_SECRET_ENCRYPTION_KEY must be 32 bytes encoded as 64 hex chars or base64."
+    });
+  }
+
+  if (value.NODE_ENV === "production" && hasAnyBootstrapCredential) {
+    if (!value.API_BOOTSTRAP_CLIENT_ID.trim() || !value.API_BOOTSTRAP_KEY.trim() || !value.API_BOOTSTRAP_SECRET.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["API_BOOTSTRAP_CLIENT_ID"],
+        message: "Bootstrap auth in production requires API_BOOTSTRAP_CLIENT_ID, API_BOOTSTRAP_KEY, and API_BOOTSTRAP_SECRET together."
+      });
+    }
+
+    if (!value.API_CLIENT_SECRET_ENCRYPTION_KEY.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["API_CLIENT_SECRET_ENCRYPTION_KEY"],
+        message: "API_CLIENT_SECRET_ENCRYPTION_KEY must be set when bootstrap auth is configured in production."
+      });
+    }
+  }
 });
 
 export type WorkerRuntimeConfig = {
@@ -140,6 +170,16 @@ function parseCollectionAllowlist(value: string): Array<{ chainId: number; contr
         contractAddress: normalizeContractAddress(contractAddress)
       };
     });
+}
+
+function looksLikeValidEncryptionKey(value: string): boolean {
+  const trimmed = value.trim();
+
+  if (/^[a-fA-F0-9]{64}$/.test(trimmed)) {
+    return true;
+  }
+
+  return Buffer.from(trimmed, "base64").length === 32;
 }
 
 export type ChainIndexingRuntimeConfig = Pick<

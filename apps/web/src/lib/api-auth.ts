@@ -375,11 +375,20 @@ async function consumeRateLimit(params: {
   const redis = getRedisClient();
 
   await redis.connect().catch(() => undefined);
+  const countResult = await redis.eval(
+    `local current = redis.call("INCR", KEYS[1])
+if current == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return current`,
+    1,
+    redisKey,
+    String(params.windowSeconds + 5)
+  );
+  const count = typeof countResult === "number" ? countResult : Number(countResult);
 
-  const count = await redis.incr(redisKey);
-
-  if (count === 1) {
-    await redis.expire(redisKey, params.windowSeconds + 5);
+  if (!Number.isFinite(count)) {
+    throw new Error("Rate limit backend returned an invalid counter value.");
   }
 
   return {

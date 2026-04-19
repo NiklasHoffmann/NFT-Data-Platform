@@ -2,14 +2,29 @@ import type { NextRequest } from "next/server";
 import { createJob } from "@nft-platform/db";
 import { reindexRangeJobSchema } from "@nft-platform/queue";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
+import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { enqueueReindexRangeJob } from "../../../../lib/queue";
 
 export const dynamic = "force-dynamic";
 
 const postHandler = withAuthenticatedRoute(["reindex:write"], async ({ auth }) => {
-  const payload = parseJsonBody(auth.bodyText);
-  const validatedPayload = reindexRangeJobSchema.parse(payload);
+  const parsedBody = safeParseJsonRequestBody(auth.bodyText);
+
+  if (!parsedBody.ok) {
+    return parsedBody.response;
+  }
+
+  const validatedPayloadResult = reindexRangeJobSchema.safeParse(parsedBody.data);
+
+  if (!validatedPayloadResult.success) {
+    return buildValidationErrorResponse({
+      error: "invalid_reindex_request",
+      issues: buildValidationIssues(validatedPayloadResult.error)
+    });
+  }
+
+  const validatedPayload = validatedPayloadResult.data;
   const timestamp = new Date();
   const database = getWebMongoDatabase();
   const queuedJob = await enqueueReindexRangeJob(validatedPayload);
@@ -34,14 +49,6 @@ const postHandler = withAuthenticatedRoute(["reindex:write"], async ({ auth }) =
     { status: queuedJob.status === "queued" || queuedJob.status === "running" ? 202 : 200 }
   );
 });
-
-function parseJsonBody(bodyText: string): unknown {
-  if (!bodyText.trim()) {
-    return {};
-  }
-
-  return JSON.parse(bodyText);
-}
 
 export async function POST(request: NextRequest): Promise<Response> {
   return postHandler(request, undefined);
