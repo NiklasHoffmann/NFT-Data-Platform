@@ -95,7 +95,7 @@ services:
       MONGODB_APP_PASSWORD: ${MONGODB_APP_PASSWORD}
     volumes:
       - mongo_auth_data:/data/db
-      - ./docker/mongo-init/01-app-user.js:/docker-entrypoint-initdb.d/01-app-user.js:ro
+      - ./docker/mongo-init/01-app-user.sh:/docker-entrypoint-initdb.d/01-app-user.sh:ro
     healthcheck:
       test:
         [
