@@ -7,6 +7,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-app-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -48,6 +50,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-app-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -91,11 +95,8 @@ services:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD}
       MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
-      MONGODB_APP_USERNAME: ${MONGODB_APP_USERNAME}
-      MONGODB_APP_PASSWORD: ${MONGODB_APP_PASSWORD}
     volumes:
       - mongo_auth_data:/data/db
-      - ./docker/mongo-init/01-app-user.sh:/docker-entrypoint-initdb.d/01-app-user.sh:ro
     healthcheck:
       test:
         [
@@ -114,6 +115,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
+
+  mongo-app-init:
+    image: mongo:8.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >-
+      /bin/sh -c '
+      mongosh "mongodb://${MONGODB_ROOT_USERNAME}:${MONGODB_ROOT_PASSWORD}@mongo:27017/admin?authSource=admin" --quiet --eval "const database = db.getSiblingDB(\"${MONGODB_DATABASE:-nft_data_platform}\"); const existingUser = database.getUser(\"${MONGODB_APP_USERNAME}\"); if (!existingUser) { database.createUser({ user: \"${MONGODB_APP_USERNAME}\", pwd: \"${MONGODB_APP_PASSWORD}\", roles: [{ role: \"readWrite\", db: \"${MONGODB_DATABASE:-nft_data_platform}\" }] }); }"'
     networks:
       - backend
 
