@@ -21,7 +21,7 @@ import { z } from "zod";
 import { serializeEnrichedCollection } from "../lib/collection-response";
 import { getWebRuntimeConfig } from "../lib/env";
 import { getWebMongoDatabase } from "../lib/mongodb";
-import { loadOperationsHealth } from "../lib/operations-health";
+import { loadOperationsHealth, type OperationsHealthSnapshot } from "../lib/operations-health";
 import { serializeEnrichedToken } from "../lib/token-response";
 import { DiscoverLiveRefresh } from "./discover-live-refresh";
 import { DiscoverSubmitButton } from "./discover-submit-button";
@@ -56,6 +56,19 @@ type CollectionTokenCardData = {
   mediaAssets: Array<ReturnType<typeof serializeMediaAssetDocument>>;
 };
 
+const emptyOperationsHealth: OperationsHealthSnapshot = {
+  summary: {
+    activeJobsCount: 0,
+    retryingMediaJobsCount: 0,
+    failedJobsCount: 0,
+    laggingCollectionsCount: 0
+  },
+  activeJobs: [],
+  retryingMediaJobs: [],
+  recentFailedJobs: [],
+  laggingCollections: []
+};
+
 export default async function HomePage(props: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
@@ -76,8 +89,20 @@ export default async function HomePage(props: {
   const bannerMessage = parsedQuery.success
     ? parsedQuery.data.message
     : "Enter a valid contract and optional token id to discover collection and NFT data from the local read model.";
-  const database = getWebMongoDatabase();
-  const operationsHealth = await loadOperationsHealth(database);
+  const shouldLoadIdentityData = parsedQuery.success && Boolean(parsedQuery.data.contractAddress);
+  const shouldLoadOperationsHealth = activeView === "operations";
+  const shouldLoadHomepageTokenPreviews = activeView === "nft" && !initialContractAddress && !initialTokenId;
+  const database = shouldLoadIdentityData || shouldLoadOperationsHealth || shouldLoadHomepageTokenPreviews ? getWebMongoDatabase() : null;
+  let operationsHealth = emptyOperationsHealth;
+  let operationsHealthWarning: string | null = null;
+
+  if (database && shouldLoadOperationsHealth) {
+    try {
+      operationsHealth = await loadOperationsHealth(database);
+    } catch {
+      operationsHealthWarning = "Operations telemetry is temporarily unavailable while MongoDB or Redis finishes starting up.";
+    }
+  }
 
   let collection: Awaited<ReturnType<typeof serializeEnrichedCollection>> | null = null;
   let token: Awaited<ReturnType<typeof serializeEnrichedToken>> | null = null;
@@ -90,9 +115,22 @@ export default async function HomePage(props: {
   let jobRecords: Array<ReturnType<typeof serializeJobDocument>> = [];
   let collectionTokenCards: CollectionTokenCardData[] = [];
   let randomTokenCards: CollectionTokenCardData[] = [];
+  let homepageTokenCards: CollectionTokenCardData[] = [];
   let pollingReason: string | null = null;
 
-  if (parsedQuery.success && parsedQuery.data.contractAddress) {
+  if (database && shouldLoadHomepageTokenPreviews) {
+    try {
+      const previewTokens = await listTokens({
+        database,
+        limit: 9
+      });
+      homepageTokenCards = await buildTokenCardData(database, previewTokens);
+    } catch {
+      homepageTokenCards = [];
+    }
+  }
+
+  if (parsedQuery.success && parsedQuery.data.contractAddress && database) {
     const normalizedContractAddress = normalizeContractAddress(parsedQuery.data.contractAddress);
     const collections = getMongoCollections(database);
     const [collectionDocument, tokenDocument, relatedJobs] = await Promise.all([
@@ -165,42 +203,7 @@ export default async function HomePage(props: {
 
           return collectionToken.supplyQuantity !== "0";
         });
-        const serializedCollectionTokens = visibleCollectionTokens.map(serializeTokenDocument);
-        const collectionMediaAssets = await findMediaAssetsByIds({
-          database,
-          assetIds: serializedCollectionTokens
-            .flatMap((collectionToken) => [
-              collectionToken.imageAssetId,
-              collectionToken.animationAssetId,
-              collectionToken.audioAssetId
-            ])
-            .filter((assetId): assetId is string => Boolean(assetId))
-            .map((assetId) => new ObjectId(assetId))
-        });
-        const collectionMediaAssetsById = new Map(
-          collectionMediaAssets.map((mediaAsset) => [
-            mediaAsset._id.toHexString(),
-            serializeMediaAssetDocument(mediaAsset)
-          ])
-        );
-
-        collectionTokenCards = serializedCollectionTokens.map((collectionToken) => ({
-          token: collectionToken,
-          tokenId: collectionToken.tokenId,
-          name: collectionToken.name,
-          supplyQuantity: collectionToken.supplyQuantity,
-          mediaStatus: collectionToken.mediaStatus,
-          updatedAt: collectionToken.updatedAt,
-          mediaAssets: [collectionToken.imageAssetId, collectionToken.animationAssetId, collectionToken.audioAssetId]
-            .flatMap((assetId) => {
-              if (!assetId) {
-                return [];
-              }
-
-              const asset = collectionMediaAssetsById.get(assetId);
-              return asset ? [asset] : [];
-            })
-        }));
+        collectionTokenCards = await buildTokenCardData(database, visibleCollectionTokens);
       }
     }
 
@@ -220,42 +223,7 @@ export default async function HomePage(props: {
             }
           }
         ]).toArray();
-        const serializedRandomTokens = randomTokenDocuments.map(serializeTokenDocument);
-        const randomMediaAssets = await findMediaAssetsByIds({
-          database,
-          assetIds: serializedRandomTokens
-            .flatMap((randomToken) => [
-              randomToken.imageAssetId,
-              randomToken.animationAssetId,
-              randomToken.audioAssetId
-            ])
-            .filter((assetId): assetId is string => Boolean(assetId))
-            .map((assetId) => new ObjectId(assetId))
-        });
-        const randomMediaAssetsById = new Map(
-          randomMediaAssets.map((mediaAsset) => [
-            mediaAsset._id.toHexString(),
-            serializeMediaAssetDocument(mediaAsset)
-          ])
-        );
-
-        randomTokenCards = serializedRandomTokens.map((randomToken) => ({
-          token: randomToken,
-          tokenId: randomToken.tokenId,
-          name: randomToken.name,
-          supplyQuantity: randomToken.supplyQuantity,
-          mediaStatus: randomToken.mediaStatus,
-          updatedAt: randomToken.updatedAt,
-          mediaAssets: [randomToken.imageAssetId, randomToken.animationAssetId, randomToken.audioAssetId]
-            .flatMap((assetId) => {
-              if (!assetId) {
-                return [];
-              }
-
-              const asset = randomMediaAssetsById.get(assetId);
-              return asset ? [asset] : [];
-            })
-        }));
+        randomTokenCards = await buildTokenCardData(database, randomTokenDocuments);
       }
 
       token = await serializeEnrichedToken(database, tokenDocument);
@@ -870,6 +838,27 @@ export default async function HomePage(props: {
                       )}
                     </ProgressiveCardGrid>
                   </section>
+                ) : homepageTokenCards.length > 0 ? (
+                  <section className="subsection-card">
+                    <h3>Recently indexed tokens</h3>
+                    <p className="panel-copy">
+                      The read model already contains tokens. You can open one directly or start a fresh discover lookup above.
+                    </p>
+                    <ProgressiveCardGrid
+                      className="asset-grid collection-token-grid known-token-grid"
+                      initialCount={3}
+                      increment={3}
+                      buttonLabel="Show more indexed tokens"
+                      remainingLabel="more indexed tokens"
+                    >
+                      {homepageTokenCards.map((collectionToken) =>
+                        renderCollectionTokenCard({
+                          collectionToken,
+                          collectionStandard: collectionToken.token.standard
+                        })
+                      )}
+                    </ProgressiveCardGrid>
+                  </section>
                 ) : null}
               </div>
             )}
@@ -1166,6 +1155,7 @@ export default async function HomePage(props: {
         <section className="panel panel--result panel--ops">
           <h2>Operations</h2>
           <div className="result-stack">
+            {operationsHealthWarning ? <p className="empty-state">{operationsHealthWarning}</p> : null}
             <div className="metadata-grid">
               <div>
                 <span className="meta-label">Active jobs</span>
@@ -1438,6 +1428,41 @@ function buildIndexedTokenHref(
     status: "loaded",
     message: "Loaded directly from the current read model."
   });
+}
+
+async function buildTokenCardData(database: ReturnType<typeof getWebMongoDatabase>, tokens: TokenDocument[]): Promise<CollectionTokenCardData[]> {
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  const serializedTokens = tokens.map(serializeTokenDocument);
+  const mediaAssets = await findMediaAssetsByIds({
+    database,
+    assetIds: serializedTokens
+      .flatMap((token) => [token.imageAssetId, token.animationAssetId, token.audioAssetId])
+      .filter((assetId): assetId is string => Boolean(assetId))
+      .map((assetId) => new ObjectId(assetId))
+  });
+  const mediaAssetsById = new Map(
+    mediaAssets.map((mediaAsset) => [mediaAsset._id.toHexString(), serializeMediaAssetDocument(mediaAsset)])
+  );
+
+  return serializedTokens.map((token) => ({
+    token,
+    tokenId: token.tokenId,
+    name: token.name,
+    supplyQuantity: token.supplyQuantity,
+    mediaStatus: token.mediaStatus,
+    updatedAt: token.updatedAt,
+    mediaAssets: [token.imageAssetId, token.animationAssetId, token.audioAssetId].flatMap((assetId) => {
+      if (!assetId) {
+        return [];
+      }
+
+      const asset = mediaAssetsById.get(assetId);
+      return asset ? [asset] : [];
+    })
+  }));
 }
 
 function formatCollectionHolderSummary(params: {
