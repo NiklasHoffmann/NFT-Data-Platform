@@ -8,5 +8,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   const formData = await request.formData();
   const redirectUrl = buildDiscoverRedirectUrl(await handleDiscoverSubmission(formData));
 
-  return NextResponse.redirect(new URL(redirectUrl, request.url), { status: 303 });
+  return new NextResponse(null, {
+    status: 303,
+    headers: {
+      Location: redirectUrl
+    }
+  });
 }
