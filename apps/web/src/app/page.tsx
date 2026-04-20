@@ -1735,12 +1735,18 @@ function MediaPreviewGallery(props: {
     { label: "Open source", href: imageAsset?.sourceUrl ?? token.imageOriginalUrl }
   ]);
 
-  const animationUrl =
-    toBrowserSafeMediaUrl(animationAsset?.cdnUrlOriginal ?? token.animationOriginalUrl ?? null) ??
-    animationAsset?.cdnUrlOriginal ??
-    token.animationOriginalUrl ??
-    null;
   const animationMimeType = animationAsset?.mimeType ?? null;
+  const animationSourceUrl = animationAsset?.sourceUrl ?? token.animationOriginalUrl ?? null;
+  const animationSourcePresentation = animationSourceUrl
+    ? inferMediaPresentation(animationSourceUrl, animationMimeType, "animation")
+    : "unknown";
+  const animationUrl =
+    animationSourcePresentation === "interactive"
+      ? normalizeBrowserMediaUrl(animationSourceUrl) ?? animationSourceUrl
+      : toBrowserSafeMediaUrl(animationAsset?.cdnUrlOriginal ?? token.animationOriginalUrl ?? null) ??
+        animationAsset?.cdnUrlOriginal ??
+        token.animationOriginalUrl ??
+        null;
   const animationStatus = getDisplayMediaAssetStatus(animationAsset?.status, animationAsset?.statusDetail, {
     sourceUrl: animationAsset?.sourceUrl ?? token.animationOriginalUrl ?? null,
     renderUrl: animationUrl,
@@ -1753,7 +1759,7 @@ function MediaPreviewGallery(props: {
     : "unknown";
   const animationViewUrl = animationUrl;
   const animationActions = buildMediaActionLinks([
-    { label: "Open animation", href: animationViewUrl },
+    { label: animationPresentation === "interactive" ? "Open experience" : "Open animation", href: animationViewUrl },
     { label: "Open source", href: animationAsset?.sourceUrl ?? token.animationOriginalUrl }
   ]);
 
@@ -1896,6 +1902,11 @@ function MediaPreviewGallery(props: {
     });
   }
 
+  const resolvedDefaultActiveIds =
+    animationPresentation === "interactive"
+      ? ["image", ...(defaultActiveIds ?? ["animation", "image"]).filter((id) => id !== "image")]
+      : defaultActiveIds;
+
   return (
     <InteractiveMediaPreviewGallery
       subjectName={token.name}
@@ -1903,7 +1914,7 @@ function MediaPreviewGallery(props: {
       subjectLabel="token"
       mediaStatus={token.mediaStatus}
       items={items}
-      defaultActiveIds={defaultActiveIds}
+      defaultActiveIds={resolvedDefaultActiveIds}
       partialMessage={
         token.mediaStatus === "partial"
           ? "Some media assets were kept as external fallbacks because not every source could be mirrored into local storage."
