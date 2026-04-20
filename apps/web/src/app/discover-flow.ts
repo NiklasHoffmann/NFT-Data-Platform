@@ -1,14 +1,19 @@
-"use server";
-
 import { createJob, findCollectionByIdentity, findJobByQueueJobId, findTokenByIdentity } from "@nft-platform/db";
 import { evmAddressSchema, evmTokenIdSchema, normalizeContractAddress } from "@nft-platform/domain";
 import { refreshCollectionJobSchema, refreshTokenJobSchema } from "@nft-platform/queue";
-import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getWebMongoDatabase } from "../lib/mongodb";
 import { enqueueRefreshCollectionJob, enqueueRefreshTokenJob } from "../lib/queue";
 
-type DiscoverStatus = "loaded" | "queued" | "invalid" | "not-found" | "unresolved" | "failed";
+export type DiscoverStatus = "loaded" | "queued" | "invalid" | "not-found" | "unresolved" | "failed";
+
+type DiscoverRedirectParams = {
+  chainId?: number;
+  contractAddress?: string;
+  tokenId?: string;
+  status: DiscoverStatus;
+  message: string;
+};
 
 const discoverTokenFormSchema = z.object({
   chainId: z.coerce.number().int().positive(),
@@ -16,7 +21,7 @@ const discoverTokenFormSchema = z.object({
   tokenId: z.union([evmTokenIdSchema, z.literal("")]).optional().transform((value) => value ?? "")
 });
 
-export async function discoverTokenAction(formData: FormData): Promise<void> {
+export async function handleDiscoverSubmission(formData: FormData): Promise<DiscoverRedirectParams> {
   const parsed = discoverTokenFormSchema.safeParse({
     chainId: formData.get("chainId") ?? undefined,
     contractAddress: formData.get("contractAddress") ?? undefined,
@@ -24,10 +29,10 @@ export async function discoverTokenAction(formData: FormData): Promise<void> {
   });
 
   if (!parsed.success) {
-    redirectToHome({
+    return {
       status: "invalid",
       message: parsed.error.issues[0]?.message ?? "Invalid discover request."
-    });
+    };
   }
 
   const database = getWebMongoDatabase();
@@ -93,13 +98,34 @@ export async function discoverTokenAction(formData: FormData): Promise<void> {
     });
   }
 
-  redirectToHome({
+  return {
     chainId: parsed.data.chainId,
     contractAddress: normalizedContractAddress,
     ...(parsed.data.tokenId ? { tokenId: parsed.data.tokenId } : {}),
     status: discoverResult.status,
     message: discoverResult.message
-  });
+  };
+}
+
+export function buildDiscoverRedirectUrl(params: DiscoverRedirectParams): string {
+  const searchParams = new URLSearchParams();
+
+  if (params.chainId !== undefined) {
+    searchParams.set("chainId", String(params.chainId));
+  }
+
+  if (params.contractAddress) {
+    searchParams.set("contractAddress", params.contractAddress);
+  }
+
+  if (params.tokenId) {
+    searchParams.set("tokenId", params.tokenId);
+  }
+
+  searchParams.set("status", params.status);
+  searchParams.set("message", params.message);
+
+  return `/?${searchParams.toString()}`;
 }
 
 async function waitForDiscoveryOutcome(params: {
@@ -267,31 +293,4 @@ function isCollectionFreshForRequest(
   }
 
   return collection.updatedAt.getTime() >= refreshStartedAt.getTime();
-}
-
-function redirectToHome(params: {
-  chainId?: number;
-  contractAddress?: string;
-  tokenId?: string;
-  status: DiscoverStatus;
-  message: string;
-}): never {
-  const searchParams = new URLSearchParams();
-
-  if (params.chainId !== undefined) {
-    searchParams.set("chainId", String(params.chainId));
-  }
-
-  if (params.contractAddress) {
-    searchParams.set("contractAddress", params.contractAddress);
-  }
-
-  if (params.tokenId) {
-    searchParams.set("tokenId", params.tokenId);
-  }
-
-  searchParams.set("status", params.status);
-  searchParams.set("message", params.message);
-
-  redirect(`/?${searchParams.toString()}`);
 }

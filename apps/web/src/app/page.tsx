@@ -24,7 +24,6 @@ import { getWebMongoDatabase } from "../lib/mongodb";
 import { loadOperationsHealth } from "../lib/operations-health";
 import { serializeEnrichedToken } from "../lib/token-response";
 import { DiscoverLiveRefresh } from "./discover-live-refresh";
-import { discoverTokenAction } from "./discover-actions";
 import { DiscoverSubmitButton } from "./discover-submit-button";
 import { InteractiveMediaPreviewGallery, type MediaGalleryItem, type MediaActionLink } from "./media-preview-gallery";
 import { ProgressiveCardGrid } from "./progressive-card-grid";
@@ -377,7 +376,7 @@ export default async function HomePage(props: {
             </div>
           </div>
 
-          <form action={discoverTokenAction} className="discover-form">
+          <form action="/discover" method="post" className="discover-form">
             <label className="field">
               <span>Chain</span>
               <select name="chainId" defaultValue={String(initialChainId)}>
