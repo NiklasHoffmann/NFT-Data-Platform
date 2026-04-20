@@ -1242,7 +1242,49 @@ li {
 }
 
 .collection-token-card__media {
+  position: relative;
   min-width: 0;
+}
+
+.collection-token-card__media-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+}
+
+.collection-token-card__header {
+  margin-bottom: 0;
+}
+
+.collection-token-card__heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.collection-token-card__heading span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.collection-token-card__title-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.collection-token-card__title-link:hover {
+  color: #9cd7ff;
+}
+
+.collection-token-card__open-link {
+  background: rgba(8, 15, 24, 0.86);
+  backdrop-filter: blur(10px);
+}
+
+.collection-token-card__footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .collection-token-card .media-stage-frame,

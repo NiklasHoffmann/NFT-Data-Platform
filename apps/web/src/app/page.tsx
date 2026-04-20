@@ -820,11 +820,58 @@ export default async function HomePage(props: {
                       : "If the contract address can be confirmed, collection-level public data will still load even when no token document is available for this id."}
                   </p>
                 </section>
+
+                {collection && collectionTokenCards.length > 0 ? (
+                  <section className="subsection-card">
+                    <h3>Known tokens from this collection</h3>
+                    <p className="panel-copy">
+                      This token is not materialized yet, but you can open already indexed tokens from the same collection.
+                    </p>
+                    <ProgressiveCardGrid
+                      className="asset-grid collection-token-grid"
+                      initialCount={3}
+                      increment={3}
+                      buttonLabel="Load more tokens"
+                      remainingLabel="more known tokens"
+                    >
+                      {collectionTokenCards.map((collectionToken) =>
+                        renderCollectionTokenCard({
+                          collectionToken,
+                          collectionStandard: collection.standard
+                        })
+                      )}
+                    </ProgressiveCardGrid>
+                  </section>
+                ) : null}
               </div>
             ) : (
-              <p className="empty-state token-empty-state">
-                No token selected yet. Enter a token id above to inspect a specific NFT inside this collection.
-              </p>
+              <div className="result-stack">
+                <p className="empty-state token-empty-state">
+                  No token selected yet. Enter a token id above to inspect a specific NFT inside this collection.
+                </p>
+                {collection && collectionTokenCards.length > 0 ? (
+                  <section className="subsection-card">
+                    <h3>Known tokens from this collection</h3>
+                    <p className="panel-copy">
+                      You can jump straight into any token that is already indexed for this collection.
+                    </p>
+                    <ProgressiveCardGrid
+                      className="asset-grid collection-token-grid"
+                      initialCount={3}
+                      increment={3}
+                      buttonLabel="Load more tokens"
+                      remainingLabel="more known tokens"
+                    >
+                      {collectionTokenCards.map((collectionToken) =>
+                        renderCollectionTokenCard({
+                          collectionToken,
+                          collectionStandard: collection.standard
+                        })
+                      )}
+                    </ProgressiveCardGrid>
+                  </section>
+                ) : null}
+              </div>
             )}
           </section>
 
@@ -1325,21 +1372,33 @@ function renderCollectionTokenCard(params: {
   collectionStandard: string;
 }) {
   const { collectionToken, collectionStandard } = params;
+  const tokenHref = buildIndexedTokenHref(collectionToken.token);
+  const tokenLabel = collectionToken.name ?? `Token ${collectionToken.tokenId}`;
 
   return (
     <div key={collectionToken.tokenId} className="asset-card collection-token-card">
       <div className="collection-token-card__media">
+        <div className="collection-token-card__media-actions">
+          <a href={tokenHref} className="detail-link collection-token-card__open-link">
+            Open token
+          </a>
+        </div>
         <MediaPreviewGallery
           token={collectionToken.token}
           mediaAssets={collectionToken.mediaAssets}
           defaultActiveIds={["image", "animation"]}
         />
       </div>
-      <dl className="detail-list">
-        <div>
-          <dt>Token id</dt>
-          <dd>{collectionToken.tokenId}</dd>
+      <div className="asset-card__header collection-token-card__header">
+        <div className="collection-token-card__heading">
+          <a href={tokenHref} className="collection-token-card__title-link">
+            <strong>{tokenLabel}</strong>
+          </a>
+          <span>Token {collectionToken.tokenId}</span>
         </div>
+        <span className={`inline-status inline-status--${collectionToken.mediaStatus}`}>{collectionToken.mediaStatus}</span>
+      </div>
+      <dl className="detail-list">
         <div>
           <dt>Name</dt>
           <dd>{formatNullable(collectionToken.name)}</dd>
@@ -1359,8 +1418,26 @@ function renderCollectionTokenCard(params: {
           <dd>{formatDateValue(collectionToken.updatedAt)}</dd>
         </div>
       </dl>
+      <div className="collection-token-card__footer">
+        <a href={tokenHref} className="detail-link">
+          Inspect token details
+        </a>
+      </div>
     </div>
   );
+}
+
+function buildIndexedTokenHref(
+  token: Pick<ReturnType<typeof serializeTokenDocument>, "chainId" | "contractAddress" | "tokenId">
+): string {
+  return buildHomeHref({
+    chainId: token.chainId,
+    contractAddress: token.contractAddress,
+    tokenId: token.tokenId,
+    view: "nft",
+    status: "loaded",
+    message: "Loaded directly from the current read model."
+  });
 }
 
 function formatCollectionHolderSummary(params: {
