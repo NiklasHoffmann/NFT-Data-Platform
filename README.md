@@ -244,3 +244,7 @@ Notes based on the current codebase:
 ## Repository framing
 
 This repository is not a generic NFT viewer and not a framework starter. Its value is in the engineering tradeoffs it exposes: how to move blockchain and media work out of request handlers, how to model read state for multiple NFT standards, how to protect internal APIs, and how to make the resulting system inspectable and operable.
+
+## License
+
+This repository is licensed under the MIT License. See the `LICENSE` file for details.
