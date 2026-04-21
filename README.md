@@ -1,94 +1,246 @@
 # NFT Data Platform
 
-Greenfield monorepo for an NFT data platform targeting ERC-721 and ERC-1155 ingestion, normalized read models, protected APIs, async refresh workflows, and object-storage-backed media delivery.
+NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and serving NFT collection and token data across ERC-721 and ERC-1155 contracts. It combines a protected read API, an operator-facing discovery UI, a BullMQ-backed worker pipeline, and S3-compatible media storage. The repository is best understood as a practical portfolio project focused on asynchronous ingest architecture, read-model design, and operational concerns around self-hosted blockchain data systems.
 
-## Workspace layout
+## What this repository demonstrates
 
-- `apps/web`: Next.js application for API and operator UI.
-- `apps/worker`: Node.js worker for indexing, refresh jobs, metadata resolution, and media processing.
-- `packages/*`: Shared domain, database, queue, chain, storage, and security building blocks.
-- `docs/architecture-plan.md`: Approved implementation plan and architecture baseline.
+- A clear split between request-time reads and asynchronous blockchain ingestion.
+- A monorepo with a Next.js application, a separate worker, and shared workspace packages for domain, queue, storage, and security concerns.
+- Protected API surfaces using API keys, HMAC request signing, scope checks, IP allowlists, replay protection, rate limiting, and audit logging.
+- Read models for collections, tokens, ERC-721 ownership, ERC-1155 balances, metadata versions, media assets, jobs, API clients, and audit logs.
+- Operator tooling for inspecting the current indexed state rather than reading live chain data in the request path.
+- Deployment thinking for local Docker Compose and a first-pass Coolify deployment with MongoDB auth, Redis auth, and internal MinIO.
+
+## Tech stack
+
+- Next.js 15 + React 19 for the API and operator UI.
+- TypeScript across the full monorepo.
+- MongoDB for normalized read models and operational records.
+- Redis + BullMQ for refresh, media, and reindex workflows.
+- MinIO / S3-compatible object storage for mirrored media.
+- Zod for runtime validation of environment variables, job payloads, and request inputs.
+- AWS SDK S3 client for storage-backed media reads through the web application.
+
+## System overview
+
+### apps/web
+
+- Next.js App Router application.
+- Serves the operator-facing discover UI at the root route.
+- Exposes HMAC-protected read and mutation endpoints under `/api/v1/*`.
+- Proxies browser-safe media reads through `/api/media`.
+- Exposes a minimal health route at `/api/health`.
+
+### apps/worker
+
+- BullMQ worker process for queued background work.
+- Handles collection refresh, token refresh, media refresh, and reindex-range jobs.
+- Runs optional background chain indexing for active collections.
+- Writes normalized state back into MongoDB instead of reading on-chain during API requests.
+
+### packages/*
+
+- `domain`: shared enums, schemas, and blockchain-facing data contracts.
+- `db`: Mongo client, validators, indexes, and read/write helpers.
+- `queue`: queue names, payload schemas, and queue option helpers.
+- `chain`: contract reads, URI normalization, deployment checks, and transfer/indexing helpers.
+- `storage`: object-storage configuration and deterministic media key generation.
+- `security`: API auth, HMAC signing/verification, scopes, and bootstrap client helpers.
+- `runtime`: shared environment loading utilities.
+
+## Product areas
+
+### Operator discover surface
+
+The operator UI is not a generic landing page. It is an inspection surface for the current read model. The main discover flow queues refresh work, waits for queued jobs to settle, and renders whatever state is already materialized in MongoDB.
+
+Current views include:
+
+- `NFT`: token-centric media, ownership, attributes, metadata payloads, and current lookup state.
+- `Collection`: collection metadata, contract signals, and indexed token coverage.
+- `Jobs`: related queue-backed job records.
+- `Raw`: stored MongoDB documents as currently materialized.
+- `Operations`: live BullMQ-backed queue health and indexing lag.
+
+### Protected read API
+
+The `/api/v1/*` surface is designed as an internal or higher-trust integration API rather than an anonymous public REST API. Requests are authenticated through API key headers and HMAC signatures, then checked for scopes, IP policy, replay safety, and rate limits before the handler runs.
+
+### Media ingestion and delivery
+
+Token and collection media are mirrored into object storage when possible. The application then serves browser-safe previews through `/api/media`, restricted to the configured storage namespace. Oversized or unsupported assets can remain external fallbacks while still appearing in the operator UI.
+
+### Background indexing
+
+The worker supports both targeted refresh jobs and optional ongoing chain indexing. Collection documents track observed and indexed checkpoints so the system can enqueue bounded `reindex-range` jobs instead of repeatedly scanning entire chains.
+
+## Why the project is technically interesting
+
+- It avoids live chain reads in the request path and treats indexing as an asynchronous systems problem.
+- It supports both ERC-721 and ERC-1155 with different ownership materialization models.
+- It keeps raw source errors while also surfacing operator-friendly failure summaries in the UI.
+- It handles media as a separate storage pipeline rather than embedding blobs in MongoDB.
+- It includes operational plumbing that many sample projects skip: queue state, replay protection, audit logging, deployment configuration, and smoke scripts.
 
 ## Local development
 
-1. Copy `.env.example` to `.env` and fill in RPC credentials.
-2. Install workspace dependencies with `npm install`.
-3. Start infrastructure with Docker Compose.
-4. Initialize MongoDB indices and seed the bootstrap API client with `npm run db:init`.
-5. Start the web app with `npm run dev:web`.
-6. Start the worker with `npm run dev:worker`.
+### Prerequisites
 
-Runtime notes:
-- `S3_PUBLIC_BASE_URL` is the public media base URL written into stored assets. When it points at local MinIO, the web app can proxy those URLs back through the app origin for browser-safe previews.
-- The `/api/media` proxy now forwards only assets under the configured `S3_PUBLIC_BASE_URL` origin and path prefix. It no longer accepts arbitrary loopback targets.
-- `MEDIA_MAX_VIDEO_BYTES` caps how much video the worker mirrors into object storage. Oversized animation or video stays available as external fallback and can leave a token in partial media state.
-- Persisted metadata and media URL fields are validated against the URI formats the pipeline actually supports: `http(s)`, normalized `ipfs`/`ar` references, and `data:` URLs where inline media is expected.
-- Worker-side metadata and media fetches reject loopback, private, link-local, multicast, and other internal network targets after hostname resolution, not only by raw hostname string.
-- Media refresh is retry-aware: temporary gateway, timeout, and network failures stay retryable instead of being finalized immediately, and IPFS-style media fetches try multiple public gateways before the job gives up.
-- `CHAIN_INDEXING_ENABLED=true` turns on the worker-side auto-index loop for active ERC-721 and ERC-1155 collections. It polls active collections, compares `lastIndexedBlock` against the observed chain head, and enqueues idempotent `reindex-range` jobs in bounded block windows.
-- `CHAIN_INDEXING_COLLECTION_ALLOWLIST` can locally narrow that loop to a comma-separated set of `<chainId>:<contractAddress>` identities so development runs do not fan out across every active collection in Mongo.
-- The local `.env` in this workspace now enables chain indexing, so restarting the worker is enough to pick the loop up.
+- Node.js 20+
+- Docker Desktop or another Docker runtime
 
-## Operator UI
+### Setup
 
-- The discover surface is split into five views: `NFT`, `Collection`, `Jobs`, `Raw`, and `Operations`.
-- `NFT` stays token-centric. It keeps the collection address for identity, but collection owner, royalty, and contract-URI signals live in the dedicated `Collection` tab.
-- `Collection` separates metadata-derived fields from contract-derived signals. Contract URI transport details, owner, and royalty signals live under `Contract signals`.
-- Collection holder summaries can intentionally show `not indexed yet` or `snapshot unavailable` when ownership state has not been materialized into MongoDB yet.
-- Metadata fetch failures are shown in the operator UI as normalized operator-facing summaries, while the underlying stored documents still retain the raw source error strings.
-- `Operations` now shows live BullMQ queue activity rather than any MongoDB job document that still happens to say `queued` or `running`.
+1. Copy `.env.example` to `.env`.
+2. Fill in RPC URLs and any local overrides you need.
+3. Install dependencies with `npm install`.
+4. Start infrastructure with `docker compose up -d`.
+5. Initialize MongoDB validators, indexes, and the bootstrap API client with `npm run db:init`.
+6. Start the web app with `npm run dev:web`.
+7. Start the worker with `npm run dev:worker`.
 
-## Bootstrap auth
+### Local infrastructure
 
-- `API_CLIENT_SECRET_ENCRYPTION_KEY` must be a 32-byte key encoded as 64 hex chars or base64.
-- `npm run db:init` creates the core MongoDB collection validators and indexes and upserts the bootstrap API client into `api_clients`.
-- Until `db:init` has run successfully, the API can still authenticate with the bootstrap env credentials as a fallback.
-- Signed API requests are freshness-checked with `x-timestamp` and are treated as one-time requests within the accepted replay window via Redis-backed replay protection.
+`docker-compose.yml` starts:
 
-## Public endpoints
+- MongoDB 8
+- Redis 7
+- MinIO
+- a MinIO init container that creates the `nft-media` bucket for local use
 
-- `GET /api/health` is intentionally minimal and returns only basic service readiness metadata: `ok`, `service`, and `status`.
-- `GET /api/media?url=...` is unauthenticated for browser previews, but it is restricted to the configured media base URL namespace.
+## Environment variables
 
-## Response notes
+The project uses `.env.example` as the local baseline and validates web runtime configuration in `apps/web/src/lib/env.ts`.
 
-- `GET /api/v1/collections/:chainId/:contractAddress` includes `lookup` and `requestedIdentity` context on success and on `collection_not_found` responses so the operator surface can distinguish lookup state from missing data.
+### Required to run the stack meaningfully
 
-## Search API
+- `APP_BASE_URL`
+- `MONGODB_URI`
+- `MONGODB_DATABASE`
+- `REDIS_URL`
+- `S3_ENDPOINT`
+- `S3_REGION`
+- `S3_ACCESS_KEY`
+- `S3_SECRET_KEY`
+- `S3_BUCKET`
+- `S3_PUBLIC_BASE_URL`
+- `API_CLIENT_SECRET_ENCRYPTION_KEY`
 
-- `GET /api/v1/search` supports `entity=tokens`, `entity=collections`, and `entity=all`.
-- `entity=all` returns a mixed feed sorted by `updatedAt` descending and includes an `entity` field on each item.
-- `metadataStatus` and `mediaStatus` are token-only filters and are accepted only when `entity=tokens`.
+### Required for chain-backed ingest
 
-## Owner API
+- `RPC_MAINNET_URL`
+- `RPC_SEPOLIA_URL`
 
-- `GET /api/v1/owners/:chainId/:contractAddress/:tokenId` returns token ownership for both standards: a single ERC-721 owner record or paginated ERC-1155 holder balances.
-- `GET /api/v1/owners/wallets/:chainId/:ownerAddress` returns a mixed paginated wallet inventory across ERC-721 and ERC-1155 and embeds matching token data.
-- Wallet inventory supports `standard`, `contractAddress`, `q`, `metadataStatus`, `mediaStatus`, `traitType`, and `traitValue` to filter embedded token matches before pagination.
-- ERC-1155 holder state is materialized during `reindex-range` jobs into `erc1155_balances` and then served from MongoDB.
-- Collection refresh now persists `deployBlock`, and ERC-1155 reindex replays from that block to avoid full-chain scans on public RPC endpoints.
-- Collection documents now distinguish `lastIndexedBlock` from the observed chain head so continuous background indexing can enqueue only the missing ranges.
+The example file also includes websocket variants, but the current worker bootstrap shown in this repository uses the HTTP RPC URLs.
 
-## Smoke Checks
+### Bootstrap API client
 
-- `npm run smoke:fixtures` validates the current local API against the two canonical reference cases used during development:
-- ERC-1155 `My Happy Tent` on Sepolia with token `4`
-- ERC-721 `People of History - Bolivar` on Sepolia with token `359`
-- The script is read-only and assumes the API is running locally and the fixtures were already refreshed into MongoDB.
-- `npm run smoke:refresh` validates the queued refresh flow for the same fixtures by posting refresh jobs, waiting for Mongo job state to reach `done`, and re-reading the resulting API state.
-- `smoke:refresh` requires both the web app and worker to be running locally.
-- `npm run smoke:discover-regressions` exercises the current regression matrix for known edge-case collections and tokens, including partial-media and ERC-1155 fallback cases.
-- `npm run smoke:reindex-erc721` deletes the local ERC-721 ownership snapshot for a bounded Panini mainnet fixture, runs a `reindex-range` processor pass, and verifies that the owner record is rebuilt from chain history.
+- `API_BOOTSTRAP_CLIENT_ID`
+- `API_BOOTSTRAP_KEY`
+- `API_BOOTSTRAP_SECRET`
+- `API_BOOTSTRAP_SCOPES`
+- `API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE`
+- `API_BOOTSTRAP_ALLOWED_IPS`
+- `AUTH_MAX_TIMESTAMP_SKEW_SEC`
 
-## Coolify demo deploy
+### Optional worker behavior
 
-- Use `docker-compose.coolify.yml` for the first server deploy instead of the local-only `docker-compose.yml`.
-- Fill your server secrets into `.env.coolify.example` and copy them into Coolify's environment UI.
-- The Coolify stack is intentionally split into `web`, `worker`, `mongo`, `redis`, `minio`, and `minio-init`.
-- Only `web` should receive a public domain. `worker`, `mongo`, `redis`, and `minio` should stay internal for the first demo deployment.
-- Keep `S3_PUBLIC_BASE_URL=http://minio:9000/nft-media` for the first deploy. The web app now reads those media objects through the configured S3 credentials and proxies them back through `/api/media`, so the MinIO bucket no longer needs anonymous download access.
-- Set dedicated credentials for `MONGODB_ROOT_USERNAME`, `MONGODB_ROOT_PASSWORD`, `MONGODB_APP_USERNAME`, `MONGODB_APP_PASSWORD`, and `REDIS_PASSWORD` in Coolify. The compose stack now enables MongoDB auth, creates an application user during first initialization, and protects Redis with a password.
-- Use URL-safe values for those MongoDB and Redis credentials because the compose file builds connection URIs from them. Stick to letters, numbers, `-`, `_`, and `.` unless you explicitly percent-encode the values yourself.
-- If your existing Coolify MongoDB volume was initialized before auth was enabled, redeploying with the new secured stack may require a fresh MongoDB volume or a manual one-time user migration. The `docker-entrypoint-initdb.d` script only creates the app user on first initialization.
-- Leave `CHAIN_INDEXING_ENABLED=false` for the first presentation deploy unless you explicitly want background indexing running on the server.
-- The web service listens on port `3000`. In Coolify, attach your domain to the `web` service and route traffic to port `3000`.
+- `MEDIA_MAX_VIDEO_BYTES`
+- `CHAIN_INDEXING_ENABLED`
+- `CHAIN_INDEXING_POLL_INTERVAL_MS`
+- `CHAIN_INDEXING_BATCH_SIZE`
+- `CHAIN_INDEXING_MAX_BLOCK_RANGE`
+- `CHAIN_INDEXING_COLLECTION_ALLOWLIST`
+
+## Representative routes
+
+### Operator UI
+
+- `/` — discover and inspect indexed collection/token state
+- `/?view=collection` — collection-focused operator view
+- `/?view=jobs` — related queued job history
+- `/?view=raw` — raw Mongo-backed document inspection
+- `/?view=operations` — queue activity and indexing lag
+
+### Utility routes
+
+- `GET /api/health` — minimal readiness signal
+- `GET /api/media?url=...` — storage-constrained media proxy for previews
+
+## Representative APIs
+
+All `/api/v1/*` routes are protected by HMAC-based API authentication.
+
+- `GET /api/v1/tokens` — paginated token listing with filters for chain, contract, metadata status, media status, and traits
+- `GET /api/v1/tokens/:chainId/:contractAddress/:tokenId` — token read with lookup state and optional collection context
+- `GET /api/v1/collections/:chainId/:contractAddress` — collection read with requested identity and lookup metadata
+- `GET /api/v1/search` — token, collection, or mixed search across indexed data
+- `GET /api/v1/owners/:chainId/:contractAddress/:tokenId` — ownership view for a token
+- `GET /api/v1/owners/wallets/:chainId/:ownerAddress` — mixed ERC-721 / ERC-1155 wallet inventory
+- `POST /api/v1/refresh/token` — queue token refresh work
+- `POST /api/v1/refresh/collection` — queue collection refresh work
+- `POST /api/v1/refresh/media` — queue media refresh work
+- `POST /api/v1/reindex` — queue bounded reindex work
+
+## Scripts
+
+### Root workspace
+
+- `npm run dev:web`
+- `npm run dev:worker`
+- `npm run build`
+- `npm run lint`
+- `npm run typecheck`
+- `npm run db:init`
+- `npm run api:request`
+
+### Smoke and regression scripts
+
+- `npm run smoke:fixtures` — validates known reference fixtures against the API
+- `npm run smoke:refresh` — exercises queued refresh flows end to end
+- `npm run smoke:discover-regressions` — runs targeted regression cases for known edge collections and tokens
+- `npm run smoke:reindex-erc721` — verifies ERC-721 ownership reconstruction through reindexing
+
+These scripts are part of what makes the repository useful for technical review: the project includes evidence of validation beyond manual browsing.
+
+## Deployment
+
+### Local
+
+Use `docker-compose.yml` for MongoDB, Redis, and MinIO, then run the web and worker processes from the workspace.
+
+### Coolify
+
+`docker-compose.coolify.yml` defines a first-pass self-hosted deployment with:
+
+- public `web`
+- internal `worker`
+- authenticated `mongo`
+- password-protected `redis`
+- internal `minio` and `minio-init`
+
+Notes based on the current codebase:
+
+- The web service listens on port `3000`.
+- `S3_PUBLIC_BASE_URL` can stay on the internal MinIO URL because the web app reads storage objects through credentials and re-serves them through `/api/media`.
+- MongoDB and Redis credentials should be URL-safe because they are interpolated into connection URIs.
+- `CHAIN_INDEXING_ENABLED=false` is a reasonable initial deployment default.
+
+## Code quality and engineering signals
+
+- Environment variables are validated with Zod.
+- API inputs and job payloads are schema-validated.
+- MongoDB collections and indexes are bootstrapped through `npm run db:init`.
+- Authenticated routes write audit logs and enforce replay/rate-limit checks.
+- The worker distinguishes retryable queue failures from terminal failures.
+- Media fetches reject internal network targets and constrain proxying to known storage paths.
+
+## Additional documentation
+
+- `docs/architecture-plan.md` — architecture baseline and implementation direction
+- `docker-compose.coolify.yml` — production-oriented deployment scaffold
+- `scripts/` — operational and regression tooling
+
+## Repository framing
+
+This repository is not a generic NFT viewer and not a framework starter. Its value is in the engineering tradeoffs it exposes: how to move blockchain and media work out of request handlers, how to model read state for multiple NFT standards, how to protect internal APIs, and how to make the resulting system inspectable and operable.
