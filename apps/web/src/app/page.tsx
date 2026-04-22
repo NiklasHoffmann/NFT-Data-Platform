@@ -483,7 +483,7 @@ export default async function HomePage(props: {
                             </div>
                             <div>
                               <dt>Metadata creator source</dt>
-                              <dd>{formatNullable(token.creator?.source ?? null)}</dd>
+                              <dd>{formatTokenCreatorSource(token.creator?.source ?? null)}</dd>
                             </div>
                             <div>
                               <dt>Last media process</dt>
@@ -574,11 +574,16 @@ export default async function HomePage(props: {
                 ) : null}
 
                 <section className="subsection-card">
-                  <h3>Ownership</h3>
+                  <h3>{token?.standard === "erc1155" ? "Holders and balances" : "Ownership"}</h3>
+                  <p className="panel-copy">
+                    {token?.standard === "erc1155"
+                      ? "ERC-1155 can have multiple holders. Balances below represent quantity per holder and are reconstructed from transfer events."
+                      : "ERC-721 has one current owner per token. The value below reflects the latest ownership snapshot."}
+                  </p>
                   {erc721OwnershipRecord ? (
                     <dl className="detail-list">
                       <div>
-                        <dt>Owner address</dt>
+                        <dt>Current owner</dt>
                         <dd className="address-copy">{erc721OwnershipRecord.ownerAddress}</dd>
                       </div>
                       <div>
@@ -602,7 +607,7 @@ export default async function HomePage(props: {
                         <table>
                           <thead>
                             <tr>
-                              <th>Owner</th>
+                              <th>Holder address</th>
                               <th>Balance</th>
                               <th>Updated</th>
                             </tr>
@@ -623,6 +628,8 @@ export default async function HomePage(props: {
                     <p className="empty-state">
                       {token?.standard === "erc1155" && token.supplyQuantity && token.supplyQuantity !== "0"
                         ? "No balance documents are currently stored. This ERC-1155 token exposes on-chain supply, but no reconstructible transfer history is available for holder snapshots."
+                        : token?.standard === "erc721"
+                          ? "No ERC-721 ownership snapshot is currently stored for this token."
                         : "No owner or balance documents are currently stored."}
                     </p>
                   )}
@@ -956,13 +963,16 @@ export default async function HomePage(props: {
                 emptyHint="No collection metadata fields are currently populated."
               >
                 {!hasCollectionMetadataDetails ? <p className="empty-state">No collection metadata fields are currently populated.</p> : null}
+                <p className="panel-copy">
+                  Creator fields in this section come from collection metadata, not from on-chain ownership/admin rights.
+                </p>
                 <dl className="detail-list detail-list--split">
                   <div>
                     <dt>External URL</dt>
                     <dd>{renderDetailActionLinks([{ label: "Open external", href: collection.externalUrl }])}</dd>
                   </div>
                   <div>
-                    <dt>Metadata creator</dt>
+                    <dt>Metadata creator name</dt>
                     <dd>{formatNullable(collection.creatorName)}</dd>
                   </div>
                   <div>
@@ -1014,9 +1024,12 @@ export default async function HomePage(props: {
                 emptyHint="No contract-level signals are currently stored."
               >
                 {!hasContractSignals ? <p className="empty-state">No contract-level signals are currently stored.</p> : null}
+                <p className="panel-copy">
+                  Contract owner and royalty values are read from on-chain contract interfaces and can differ from metadata creator fields.
+                </p>
                 <dl className="detail-list detail-list--split">
                   <div>
-                    <dt>Contract owner</dt>
+                    <dt>Contract owner (admin)</dt>
                     <dd>{collection.contractOwnerAddress ? <span className="address-copy">{collection.contractOwnerAddress}</span> : "-"}</dd>
                   </div>
                   <div>
@@ -1538,6 +1551,14 @@ function formatOperatorMetadataError(value: string | null | undefined): string {
   }
 
   return "Source could not be loaded from the current metadata URL.";
+}
+
+function formatTokenCreatorSource(source: string | null | undefined): string {
+  if (!source?.trim()) {
+    return "-";
+  }
+
+  return source.startsWith("metadata") ? `metadata path: ${source}` : source;
 }
 
 function formatNullable(value: unknown): string {
