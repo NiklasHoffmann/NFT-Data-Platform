@@ -10,26 +10,43 @@ loadLocalEnvFiles({
   roots: [resolve(dirname(fileURLToPath(import.meta.url)), "../../../../")]
 });
 
+const emptyStringToUndefined = (value: unknown): unknown => {
+  if (typeof value === "string" && value.trim() === "") {
+    return undefined;
+  }
+
+  return value;
+};
+
+const optionalUrlWithDefault = (defaultValue: string) =>
+  z.preprocess(emptyStringToUndefined, z.string().url().default(defaultValue));
+
+const optionalNonEmptyStringWithDefault = (defaultValue: string) =>
+  z.preprocess(emptyStringToUndefined, z.string().min(1).default(defaultValue));
+
+const optionalPositiveIntWithDefault = (defaultValue: number) =>
+  z.preprocess(emptyStringToUndefined, z.coerce.number().int().positive().default(defaultValue));
+
 const webRuntimeConfigSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  APP_BASE_URL: z.string().url().default("http://localhost:3000"),
-  S3_PUBLIC_BASE_URL: z.string().url().default("http://localhost:9000/nft-media"),
-  S3_ENDPOINT: z.string().url().default("http://localhost:9000"),
-  S3_REGION: z.string().min(1).default("us-east-1"),
+  APP_BASE_URL: optionalUrlWithDefault("http://localhost:3000"),
+  S3_PUBLIC_BASE_URL: optionalUrlWithDefault("http://localhost:9000/nft-media"),
+  S3_ENDPOINT: optionalUrlWithDefault("http://localhost:9000"),
+  S3_REGION: optionalNonEmptyStringWithDefault("us-east-1"),
   S3_ACCESS_KEY: z.string().default(""),
   S3_SECRET_KEY: z.string().default(""),
-  S3_BUCKET: z.string().min(1).default("nft-media"),
-  MONGODB_URI: z.string().min(1).default("mongodb://localhost:27017"),
-  MONGODB_DATABASE: z.string().min(1).default("nft_data_platform"),
-  REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
+  S3_BUCKET: optionalNonEmptyStringWithDefault("nft-media"),
+  MONGODB_URI: optionalNonEmptyStringWithDefault("mongodb://localhost:27017"),
+  MONGODB_DATABASE: optionalNonEmptyStringWithDefault("nft_data_platform"),
+  REDIS_URL: optionalNonEmptyStringWithDefault("redis://localhost:6379"),
   API_CLIENT_SECRET_ENCRYPTION_KEY: z.string().default(""),
   API_BOOTSTRAP_CLIENT_ID: z.string().default(""),
   API_BOOTSTRAP_KEY: z.string().default(""),
   API_BOOTSTRAP_SECRET: z.string().default(""),
   API_BOOTSTRAP_SCOPES: z.string().default(""),
-  API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(300),
+  API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: optionalPositiveIntWithDefault(300),
   API_BOOTSTRAP_ALLOWED_IPS: z.string().default(""),
-  AUTH_MAX_TIMESTAMP_SKEW_SEC: z.coerce.number().int().positive().default(300)
+  AUTH_MAX_TIMESTAMP_SKEW_SEC: optionalPositiveIntWithDefault(300)
 }).superRefine((value, context) => {
   const hasAnyBootstrapCredential = Boolean(
     value.API_BOOTSTRAP_CLIENT_ID.trim() || value.API_BOOTSTRAP_KEY.trim() || value.API_BOOTSTRAP_SECRET.trim()

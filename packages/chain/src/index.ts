@@ -503,20 +503,12 @@ export async function readErc1155TransfersInRange(params: {
 
   for (let chunkStart = startBlock; chunkStart <= endBlock; chunkStart += chunkSize) {
     const chunkEnd = chunkStart + chunkSize - 1n > endBlock ? endBlock : chunkStart + chunkSize - 1n;
-    const [singleLogs, batchLogs] = await Promise.all([
-      params.client.getLogs({
-        address,
-        event: erc1155TransferSingleEvent,
-        fromBlock: chunkStart,
-        toBlock: chunkEnd
-      }),
-      params.client.getLogs({
-        address,
-        event: erc1155TransferBatchEvent,
-        fromBlock: chunkStart,
-        toBlock: chunkEnd
-      })
-    ]);
+    const { singleLogs, batchLogs } = await readErc1155LogsForWindowWithFallback({
+      client: params.client,
+      address,
+      fromBlock: chunkStart,
+      toBlock: chunkEnd
+    });
 
     for (const log of singleLogs) {
       const args = log.args as {
@@ -675,20 +667,12 @@ export async function hasErc1155TokenTransferActivity(params: {
   try {
     for (let chunkStart = startBlock; chunkStart <= endBlock; chunkStart += chunkSize) {
       const chunkEnd = chunkStart + chunkSize - 1n > endBlock ? endBlock : chunkStart + chunkSize - 1n;
-      const [singleLogs, batchLogs] = await Promise.all([
-        params.client.getLogs({
-          address,
-          event: erc1155TransferSingleEvent,
-          fromBlock: chunkStart,
-          toBlock: chunkEnd
-        }),
-        params.client.getLogs({
-          address,
-          event: erc1155TransferBatchEvent,
-          fromBlock: chunkStart,
-          toBlock: chunkEnd
-        })
-      ]);
+      const { singleLogs, batchLogs } = await readErc1155LogsForWindowWithFallback({
+        client: params.client,
+        address,
+        fromBlock: chunkStart,
+        toBlock: chunkEnd
+      });
 
       for (const log of singleLogs) {
         const args = log.args as {
@@ -752,20 +736,12 @@ export async function readErc1155TransfersForTokenInRange(params: {
 
   for (let chunkStart = startBlock; chunkStart <= endBlock; chunkStart += chunkSize) {
     const chunkEnd = chunkStart + chunkSize - 1n > endBlock ? endBlock : chunkStart + chunkSize - 1n;
-    const [singleLogs, batchLogs] = await Promise.all([
-      params.client.getLogs({
-        address,
-        event: erc1155TransferSingleEvent,
-        fromBlock: chunkStart,
-        toBlock: chunkEnd
-      }),
-      params.client.getLogs({
-        address,
-        event: erc1155TransferBatchEvent,
-        fromBlock: chunkStart,
-        toBlock: chunkEnd
-      })
-    ]);
+    const { singleLogs, batchLogs } = await readErc1155LogsForWindowWithFallback({
+      client: params.client,
+      address,
+      fromBlock: chunkStart,
+      toBlock: chunkEnd
+    });
 
     for (const log of singleLogs) {
       const args = log.args as {
@@ -888,4 +864,91 @@ function topicToAddress(topic: string): Address | undefined {
   }
 
   return getAddress(`0x${topic.slice(-40)}`);
+}
+
+type Erc1155SingleLogs = Awaited<ReturnType<typeof fetchErc1155TransferSingleLogs>>;
+type Erc1155BatchLogs = Awaited<ReturnType<typeof fetchErc1155TransferBatchLogs>>;
+
+async function fetchErc1155TransferSingleLogs(params: {
+  client: PublicClient;
+  address: Address;
+  fromBlock: bigint;
+  toBlock: bigint;
+}) {
+  return params.client.getLogs({
+    address: params.address,
+    event: erc1155TransferSingleEvent,
+    fromBlock: params.fromBlock,
+    toBlock: params.toBlock
+  });
+}
+
+async function fetchErc1155TransferBatchLogs(params: {
+  client: PublicClient;
+  address: Address;
+  fromBlock: bigint;
+  toBlock: bigint;
+}) {
+  return params.client.getLogs({
+    address: params.address,
+    event: erc1155TransferBatchEvent,
+    fromBlock: params.fromBlock,
+    toBlock: params.toBlock
+  });
+}
+
+async function readErc1155LogsForWindowWithFallback(params: {
+  client: PublicClient;
+  address: Address;
+  fromBlock: bigint;
+  toBlock: bigint;
+}): Promise<{
+  singleLogs: Erc1155SingleLogs;
+  batchLogs: Erc1155BatchLogs;
+}> {
+  try {
+    const [singleLogs, batchLogs] = await Promise.all([
+      fetchErc1155TransferSingleLogs(params),
+      fetchErc1155TransferBatchLogs(params)
+    ]);
+
+    return {
+      singleLogs,
+      batchLogs
+    };
+  } catch (error) {
+    if (params.fromBlock >= params.toBlock) {
+      console.warn("[chain] failed to read ERC-1155 logs for block", {
+        blockNumber: Number(params.fromBlock),
+        address: params.address,
+        error
+      });
+
+      return {
+        singleLogs: [],
+        batchLogs: []
+      };
+    }
+
+    const middleBlock = params.fromBlock + (params.toBlock - params.fromBlock) / 2n;
+    const [leftWindow, rightWindow] = await Promise.all([
+      readErc1155LogsForWindowWithFallback({
+        client: params.client,
+        address: params.address,
+        fromBlock: params.fromBlock,
+        toBlock: middleBlock
+      }),
+      readErc1155LogsForWindowWithFallback({
+        client: params.client,
+        address: params.address,
+        fromBlock: middleBlock + 1n,
+        toBlock: params.toBlock
+      })
+    ]);
+
+    return {
+      singleLogs: [...leftWindow.singleLogs, ...rightWindow.singleLogs],
+      batchLogs: [...leftWindow.batchLogs, ...rightWindow.batchLogs]
+    };
+  }
 }
