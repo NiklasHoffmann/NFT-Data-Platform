@@ -2247,24 +2247,7 @@ async function resolveDirectMediaMimeType(
     return inferredMimeType;
   }
 
-  const probeUrl = unwrapMediaProxyUrl(url) ?? url;
-
-  if (!/^https?:\/\//i.test(probeUrl)) {
-    return null;
-  }
-
-  try {
-    const response = await fetch(probeUrl, {
-      method: "HEAD",
-      redirect: "follow",
-      signal: AbortSignal.timeout(4_000)
-    });
-    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? null;
-
-    return contentType || null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function buildDirectMediaStage(params: {
