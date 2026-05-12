@@ -135,6 +135,7 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+    exclude_from_hc: true
     restart: "no"
     entrypoint: >-
       /bin/sh -c '
@@ -178,6 +179,7 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    exclude_from_hc: true
     restart: "no"
     entrypoint: >-
       /bin/sh -c "

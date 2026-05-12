@@ -222,10 +222,11 @@ Use `docker-compose.yml` for MongoDB, Redis, and MinIO, then run the web and wor
 Notes based on the current codebase:
 
 - The web service listens on port `3000`.
-- In Coolify Compose deployments, use the public domain without `:3000` and set the web service target/container port to `3000` in Coolify routing.
+- In Coolify Compose deployments, if the `web` service listens on container port `3000`, enter the domain with `:3000` in Coolify for that service so the proxy routes to the correct internal port while still exposing the app on the normal public URL.
 - `S3_PUBLIC_BASE_URL` can stay on the internal MinIO URL because the web app reads storage objects through credentials and re-serves them through `/api/media`.
 - MongoDB and Redis credentials should be URL-safe because they are interpolated into connection URIs.
 - `CHAIN_INDEXING_ENABLED=false` is a reasonable initial deployment default.
+- `mongo-app-init` and `minio-init` are one-shot init services; in Coolify they should be excluded from overall healthchecks so an expected exited state does not look like a failed deployment.
 
 ## Code quality and engineering signals
 
