@@ -2764,18 +2764,16 @@ function looksLikeSvgContent(bytes: Uint8Array): boolean {
 function normalizeAttributes(value: unknown): TokenAttribute[] {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return Object.entries(value as Record<string, unknown>).flatMap(([traitType, traitValue]) => {
-      if (
-        typeof traitValue !== "string" &&
-        typeof traitValue !== "number" &&
-        typeof traitValue !== "boolean"
-      ) {
+      const normalizedTraitType = asNullableString(traitType);
+      const normalizedValue = normalizeAttributeValue(traitValue);
+
+      if (!normalizedTraitType || normalizedValue === null) {
         return [];
       }
 
       return [{
-        trait_type: traitType,
-        value: traitValue,
-        display_type: undefined
+        trait_type: normalizedTraitType,
+        value: normalizedValue
       } satisfies TokenAttribute];
     });
   }
@@ -2792,19 +2790,41 @@ function normalizeAttributes(value: unknown): TokenAttribute[] {
     }
 
     const raw = entry as Record<string, unknown>;
-    attributes.push({
-      trait_type: asNullableString(raw.trait_type) ?? undefined,
-      value:
-        typeof raw.value === "string" ||
-        typeof raw.value === "number" ||
-        typeof raw.value === "boolean"
-          ? raw.value
-          : undefined,
-      display_type: asNullableString(raw.display_type) ?? undefined
-    });
+    const normalizedAttribute: TokenAttribute = {};
+    const traitType = asNullableString(raw.trait_type);
+    const attributeValue = normalizeAttributeValue(raw.value);
+    const displayType = asNullableString(raw.display_type);
+
+    if (traitType) {
+      normalizedAttribute.trait_type = traitType;
+    }
+
+    if (attributeValue !== null) {
+      normalizedAttribute.value = attributeValue;
+    }
+
+    if (displayType) {
+      normalizedAttribute.display_type = displayType;
+    }
+
+    if (Object.keys(normalizedAttribute).length > 0) {
+      attributes.push(normalizedAttribute);
+    }
   }
 
   return attributes;
+}
+
+function normalizeAttributeValue(value: unknown): string | number | boolean | null {
+  if (typeof value === "string") {
+    return asNullableString(value);
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  return null;
 }
 
 export async function enqueueFollowUpMediaRefresh(params: {
