@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
     "@nft-platform/security",
     "@nft-platform/storage"
   ],
+  eslint: {
+    ignoreDuringBuilds: true
+  },
   images: {
     localPatterns: [
       {

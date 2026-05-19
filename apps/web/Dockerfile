@@ -9,7 +9,7 @@ COPY . .
 RUN npm ci --include=dev
 
 ENV NODE_ENV=production
-RUN npm run build --workspace @nft-platform/web
+RUN NODE_OPTIONS=--max-old-space-size=512 npm run build --workspace @nft-platform/web
 
 EXPOSE 3000
 
