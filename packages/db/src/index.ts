@@ -1515,6 +1515,7 @@ export async function listErc1155BalancesByOwner(params: {
   }
 
   const tokenQuery = buildTokenFilterQuery(tokenFilterParams);
+  const requiresTokenMatch = Object.keys(tokenQuery).length > 0;
 
   const cursorQuery: Filter<Erc1155BalanceDocument> | null = params.cursor
     ? {
@@ -1539,6 +1540,14 @@ export async function listErc1155BalancesByOwner(params: {
         $and: [query, cursorQuery]
       } satisfies Filter<Erc1155BalanceDocument>)
     : query;
+
+  if (!requiresTokenMatch) {
+    return getMongoCollections(params.database)
+      .erc1155Balances.find(finalQuery)
+      .sort({ updatedAt: -1, _id: -1 })
+      .limit(params.limit ?? 100)
+      .toArray();
+  }
 
   const lookupPipeline: Array<Record<string, unknown>> = [
     {
@@ -1654,6 +1663,7 @@ export async function listErc721OwnershipByOwner(params: {
   }
 
   const tokenQuery = buildTokenFilterQuery(tokenFilterParams);
+  const requiresTokenMatch = Object.keys(tokenQuery).length > 0;
 
   const cursorQuery: Filter<Erc721OwnershipDocument> | null = params.cursor
     ? {
@@ -1678,6 +1688,14 @@ export async function listErc721OwnershipByOwner(params: {
         $and: [query, cursorQuery]
       } satisfies Filter<Erc721OwnershipDocument>)
     : query;
+
+  if (!requiresTokenMatch) {
+    return getMongoCollections(params.database)
+      .erc721Ownership.find(finalQuery)
+      .sort({ updatedAt: -1, _id: -1 })
+      .limit(params.limit ?? 100)
+      .toArray();
+  }
 
   const lookupPipeline: Array<Record<string, unknown>> = [
     {

@@ -1,11 +1,11 @@
 # NFT Data Platform
 
-NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and serving NFT collection and token data across ERC-721 and ERC-1155 contracts. It combines a protected read API, an operator-facing discovery UI, a BullMQ-backed worker pipeline, and S3-compatible media storage. The repository is best understood as a practical portfolio project focused on asynchronous ingest architecture, read-model design, and operational concerns around self-hosted blockchain data systems.
+NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and serving NFT collection and token data across ERC-721 and ERC-1155 contracts. It combines a protected read API, a temporary operator-facing discovery UI for testing, a BullMQ-backed worker pipeline, and S3-compatible media storage. The long-term architecture treats this repository primarily as an API and worker service that will be consumed by separately developed wallet and marketplace frontends.
 
 ## What this repository demonstrates
 
 - A clear split between request-time reads and asynchronous blockchain ingestion.
-- A monorepo with a Next.js application, a separate worker, and shared workspace packages for domain, queue, storage, and security concerns.
+- A monorepo with a Next.js API/test surface, a separate worker, and shared workspace packages for domain, queue, storage, and security concerns.
 - Protected API surfaces using API keys, HMAC request signing, scope checks, IP allowlists, replay protection, rate limiting, and audit logging.
 - Read models for collections, tokens, ERC-721 ownership, ERC-1155 balances, metadata versions, media assets, jobs, API clients, and audit logs.
 - Operator tooling for inspecting the current indexed state rather than reading live chain data in the request path.
@@ -26,7 +26,7 @@ NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and servi
 ### apps/web
 
 - Next.js App Router application.
-- Serves the operator-facing discover UI at the root route.
+- Serves the API surface and a temporary operator-facing discover UI for testing and inspection.
 - Exposes HMAC-protected read and mutation endpoints under `/api/v1/*`.
 - Proxies browser-safe media reads through `/api/media`.
 - Exposes a minimal health route at `/api/health`.
@@ -52,7 +52,7 @@ NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and servi
 
 ### Operator discover surface
 
-The operator UI is not a generic landing page. It is an inspection surface for the current read model. The main discover flow queues refresh work, waits for queued jobs to settle, and renders whatever state is already materialized in MongoDB.
+The operator UI is not a generic landing page and not intended as the long-term user-facing product frontend. It is an internal inspection and test surface for the current read model. The main discover flow queues refresh work, waits for queued jobs to settle, and renders whatever state is already materialized in MongoDB.
 
 Current views include:
 
@@ -65,6 +65,8 @@ Current views include:
 ### Protected read API
 
 The `/api/v1/*` surface is designed as an internal or higher-trust integration API rather than an anonymous public REST API. Requests are authenticated through API key headers and HMAC signatures, then checked for scopes, IP policy, replay safety, and rate limits before the handler runs.
+
+This API is intended to be consumed by separately deployed wallet and marketplace services in a microservices-style architecture.
 
 ### Media ingestion and delivery
 
@@ -177,6 +179,7 @@ All `/api/v1/*` routes are protected by HMAC-based API authentication.
 - `GET /api/v1/search` — token, collection, or mixed search across indexed data
 - `GET /api/v1/owners/:chainId/:contractAddress/:tokenId` — ownership view for a token
 - `GET /api/v1/owners/wallets/:chainId/:ownerAddress` — mixed ERC-721 / ERC-1155 wallet inventory
+- `GET /api/v1/owners/wallets/:ownerAddress` — multi-chain wallet inventory across supported chains with embedded token and collection summaries
 - `POST /api/v1/refresh/token` — queue token refresh work
 - `POST /api/v1/refresh/collection` — queue collection refresh work
 - `POST /api/v1/refresh/media` — queue media refresh work
@@ -240,6 +243,7 @@ Notes based on the current codebase:
 ## Additional documentation
 
 - `docs/architecture-plan.md` — architecture baseline and implementation direction
+- `docs/wallet-api.md` — wallet inventory integration guide with the multi-chain endpoint, example response shape, and a server-side HMAC client snippet
 - `docker-compose.coolify.yml` — production-oriented deployment scaffold
 - `scripts/` — operational and regression tooling
 
