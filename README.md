@@ -1,6 +1,6 @@
 # NFT Data Platform
 
-NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and serving NFT collection and token data across ERC-721 and ERC-1155 contracts. It combines a protected read API, a temporary operator-facing discovery UI for testing, a BullMQ-backed worker pipeline, and S3-compatible media storage. The long-term architecture treats this repository primarily as an API and worker service that will be consumed by separately developed wallet and marketplace frontends.
+NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and serving NFT collection and token data across ERC-721 and ERC-1155 contracts. It combines a protected read API, a temporary operator-facing discovery UI for testing, a BullMQ-backed worker pipeline, and S3-compatible media storage. The long-term architecture treats this repository primarily as an API and worker service that will be consumed by separately developed wallet, marketplace, and admin-governance services.
 
 ## What this repository demonstrates
 
@@ -66,7 +66,7 @@ Current views include:
 
 The `/api/v1/*` surface is designed as an internal or higher-trust integration API rather than an anonymous public REST API. Requests are authenticated through API key headers and HMAC signatures, then checked for scopes, IP policy, replay safety, and rate limits before the handler runs.
 
-This API is intended to be consumed by separately deployed wallet and marketplace services in a microservices-style architecture.
+This API is intended to be consumed by separately deployed wallet, marketplace, and admin-governance services in a microservices-style architecture.
 
 ### Media ingestion and delivery
 
@@ -249,6 +249,7 @@ Notes based on the current codebase:
 - `docs/wallet-api.md` — wallet inventory integration guide with the multi-chain endpoint, example response shape, and a server-side HMAC client snippet
 - `docs/wallet-application-requirements.md` — target architecture and implementation requirements for the separate wallet service
 - `docs/marketplace-application-requirements.md` — target architecture and implementation requirements for the separate marketplace service
+- `docs/admin-governance-application-requirements.md` — target architecture and implementation requirements for the separate admin and governance service
 - `docker-compose.coolify.yml` — production-oriented deployment scaffold
 - `scripts/` — operational and regression tooling
 

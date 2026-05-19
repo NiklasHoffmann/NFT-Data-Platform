@@ -4,6 +4,8 @@ Dieses Dokument beschreibt die Anforderungen fuer ein Marktplatz-Frontend, das p
 
 Die NFT Data Platform selbst ist dabei nicht das spaetere Marktplatz-Frontend. Das vorhandene Web-Frontend in diesem Repository dient nur als Test-, Operator- und Integrationsoberflaeche fuer API und Worker.
 
+Neben dem Marktplatz-Service wird in der Zielarchitektur ein separater Admin- und Governance-Service betrieben, der die Marketplace-Regeln steuert und dazu mit IdeationMarket kommuniziert.
+
 Das Zielbild ist:
 
 - TheGraph oder eine vergleichbare Query-Quelle liefert die relevanten NFT-Identitaeten fuer den Marktplatz
@@ -27,13 +29,15 @@ Quelle 2: NFT Data Platform
 - Media-Daten
 - normalisierte NFT-Darstellung fuer das Frontend
 
-Das Marktplatz-Frontend und die NFT Data Platform werden als getrennte Services entwickelt und deployed.
+Das Marktplatz-Frontend, die NFT Data Platform und der separate Admin- und Governance-Service werden als getrennte Services entwickelt und deployed.
 
 ## Architekturprinzip
 
 Das Marktplatz-Frontend darf die anzuzeigenden NFTs aus TheGraph ableiten, aber nicht die endgueltige NFT-Darstellung aus TheGraph rendern.
 
 Die Data Platform wird in dieser Architektur als eigenes Backend-Microservice behandelt, nicht als Teil des Marktplatz-Frontends.
+
+Die steuernde Marketplace-Governance liegt ebenfalls nicht in der Data Platform, sondern in einem separaten Admin- und Governance-Service zusammen mit der IdeationMarket-Domaene.
 
 Stattdessen gilt dieser Ablauf:
 
