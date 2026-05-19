@@ -180,6 +180,8 @@ All `/api/v1/*` routes are protected by HMAC-based API authentication.
 - `GET /api/v1/owners/:chainId/:contractAddress/:tokenId` — ownership view for a token
 - `GET /api/v1/owners/wallets/:chainId/:ownerAddress` — mixed ERC-721 / ERC-1155 wallet inventory
 - `GET /api/v1/owners/wallets/:ownerAddress` — multi-chain wallet inventory across supported chains with embedded token and collection summaries
+- `POST /api/v1/owners/wallets/discover` — accepts externally resolved wallet holdings, returns indexed NFTs immediately, and queues missing NFTs for discovery
+- `POST /api/v1/tokens/discover` — accepts externally resolved token identities, returns indexed NFTs immediately, and queues missing NFTs for discovery
 - `POST /api/v1/refresh/token` — queue token refresh work
 - `POST /api/v1/refresh/collection` — queue collection refresh work
 - `POST /api/v1/refresh/media` — queue media refresh work
@@ -243,7 +245,10 @@ Notes based on the current codebase:
 ## Additional documentation
 
 - `docs/architecture-plan.md` — architecture baseline and implementation direction
+- `docs/nft-api.md` — quickstart for the protected NFT API including list, detail, search, and discover flows
 - `docs/wallet-api.md` — wallet inventory integration guide with the multi-chain endpoint, example response shape, and a server-side HMAC client snippet
+- `docs/wallet-application-requirements.md` — target architecture and implementation requirements for the separate wallet service
+- `docs/marketplace-application-requirements.md` — target architecture and implementation requirements for the separate marketplace service
 - `docker-compose.coolify.yml` — production-oriented deployment scaffold
 - `scripts/` — operational and regression tooling
 
