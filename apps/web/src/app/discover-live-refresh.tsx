@@ -15,6 +15,7 @@ export function DiscoverLiveRefresh(props: { active: boolean; reason: string | n
     }
 
     const interval = window.setInterval(() => {
+      if (isPending) return;
       startTransition(() => {
         router.refresh();
         setRefreshCount((current) => current + 1);
