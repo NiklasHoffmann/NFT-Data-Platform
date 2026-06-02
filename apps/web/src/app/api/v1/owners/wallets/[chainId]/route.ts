@@ -8,7 +8,7 @@ import { loadWalletInventory, ownerInventoryQuerySchema } from "../../../../../.
 export const dynamic = "force-dynamic";
 
 type MultiChainWalletOwnersRouteContext = {
-  params: Promise<{ ownerAddress: string }>;
+  params: Promise<{ chainId: string }>;
 };
 
 const getHandler = withAuthenticatedRoute<MultiChainWalletOwnersRouteContext>(["owners:read"], async ({ context, request }) => {
@@ -32,7 +32,7 @@ const getHandler = withAuthenticatedRoute<MultiChainWalletOwnersRouteContext>(["
     });
   }
 
-  const parsedOwnerAddress = evmAddressSchema.safeParse(params.ownerAddress);
+  const parsedOwnerAddress = evmAddressSchema.safeParse(params.chainId);
 
   if (!parsedOwnerAddress.success) {
     return Response.json(
