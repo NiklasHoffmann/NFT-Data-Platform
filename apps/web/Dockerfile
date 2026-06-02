@@ -6,10 +6,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY . .
 
-RUN npm ci --include=dev
+RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --include=dev
 
 ENV NODE_ENV=production
-RUN NODE_OPTIONS=--max-old-space-size=512 npm run build --workspace @nft-platform/web
+RUN NODE_OPTIONS=--max-old-space-size=1536 npm run build --workspace @nft-platform/web
 
 EXPOSE 3000
 

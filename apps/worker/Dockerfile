@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN npm ci --include=dev
+RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --include=dev
 
 ENV NODE_ENV=production
 
