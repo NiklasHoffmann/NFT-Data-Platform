@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 export function DiscoverLiveRefresh(props: { active: boolean; reason: string | null }) {
@@ -8,6 +8,11 @@ export function DiscoverLiveRefresh(props: { active: boolean; reason: string | n
   const router = useRouter();
   const [refreshCount, setRefreshCount] = useState(0);
   const [isPending, startTransition] = useTransition();
+  const isPendingRef = useRef(false);
+
+  useEffect(() => {
+    isPendingRef.current = isPending;
+  }, [isPending]);
 
   useEffect(() => {
     if (!active) {
@@ -15,7 +20,7 @@ export function DiscoverLiveRefresh(props: { active: boolean; reason: string | n
     }
 
     const interval = window.setInterval(() => {
-      if (isPending) return;
+      if (isPendingRef.current) return;
       startTransition(() => {
         router.refresh();
         setRefreshCount((current) => current + 1);
