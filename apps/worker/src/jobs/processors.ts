@@ -26,13 +26,13 @@ import {
   type CollectionDocument,
   countTokensForCollections,
   createMetadataVersion,
+  deleteErc721Ownership,
   deleteTokenAndDependents,
+  findAllErc1155BalancesForToken,
   findCollectionByIdentity,
   listTokens,
   listErc1155Balances,
   findTokenByIdentity,
-  replaceErc721OwnershipForCollection,
-  replaceErc1155BalancesForCollection,
   replaceErc1155BalancesForToken,
   upsertErc721Ownership,
   upsertCollection,
@@ -1248,52 +1248,72 @@ async function materializeErc1155Balances(params: {
   affectedTokens: string[];
 }> {
   const publicClient = getPublicClientForChain(params.chainId, params.context);
-  const replayedFromBlock = params.deployBlock ?? params.payload.fromBlock;
   const transfers = await readErc1155TransfersInRange({
     client: publicClient,
     contractAddress: params.contractAddress,
-    fromBlock: replayedFromBlock,
+    fromBlock: params.payload.fromBlock,
     toBlock: params.payload.toBlock
   });
-  const balancesByKey = new Map<string, { tokenId: string; ownerAddress: string; balance: bigint }>();
-  const affectedTokens = new Set<string>();
+
+  // Build per-token delta maps: tokenId -> ownerAddress -> delta (bigint)
+  const deltasByToken = new Map<string, Map<string, bigint>>();
 
   for (const transfer of transfers) {
-    if (transfer.blockNumber >= params.payload.fromBlock) {
-      affectedTokens.add(transfer.tokenId);
+    let tokenDeltas = deltasByToken.get(transfer.tokenId);
+
+    if (!tokenDeltas) {
+      tokenDeltas = new Map();
+      deltasByToken.set(transfer.tokenId, tokenDeltas);
     }
 
-    applyErc1155BalanceDelta({
-      balancesByKey,
-      tokenId: transfer.tokenId,
-      ownerAddress: transfer.fromAddress,
-      delta: -BigInt(transfer.value)
+    applyErc1155BalanceDeltaToMap(tokenDeltas, transfer.fromAddress, -BigInt(transfer.value));
+    applyErc1155BalanceDeltaToMap(tokenDeltas, transfer.toAddress, BigInt(transfer.value));
+  }
+
+  const affectedTokens = [...deltasByToken.keys()];
+  let totalHolderCount = 0;
+
+  for (const [tokenId, deltas] of deltasByToken) {
+    // Read current DB balances for this token and apply the new deltas on top.
+    const existingBalances = await findAllErc1155BalancesForToken({
+      database: params.context.database,
+      chainId: params.chainId,
+      contractAddress: params.contractAddress,
+      tokenId
     });
-    applyErc1155BalanceDelta({
-      balancesByKey,
-      tokenId: transfer.tokenId,
-      ownerAddress: transfer.toAddress,
-      delta: BigInt(transfer.value)
+    const balanceMap = new Map<string, bigint>(
+      existingBalances.map((doc) => [doc.ownerAddress, BigInt(doc.balance)])
+    );
+
+    for (const [ownerAddress, delta] of deltas) {
+      const next = (balanceMap.get(ownerAddress) ?? 0n) + delta;
+
+      if (next <= 0n) {
+        balanceMap.delete(ownerAddress);
+      } else {
+        balanceMap.set(ownerAddress, next);
+      }
+    }
+
+    totalHolderCount += balanceMap.size;
+
+    await replaceErc1155BalancesForToken(params.context.database, {
+      chainId: params.chainId,
+      contractAddress: params.contractAddress,
+      tokenId,
+      balances: [...balanceMap.entries()].map(([ownerAddress, balance]) => ({
+        chainId: params.chainId,
+        contractAddress: params.contractAddress,
+        tokenId,
+        ownerAddress,
+        balance: balance.toString(),
+        updatedAt: params.updatedAt
+      }))
     });
   }
 
-  await replaceErc1155BalancesForCollection(params.context.database, {
-    chainId: params.chainId,
-    contractAddress: params.contractAddress,
-    balances: [...balancesByKey.values()]
-      .filter((entry) => entry.balance > 0n)
-      .map((entry) => ({
-        chainId: params.chainId,
-        contractAddress: params.contractAddress,
-        tokenId: entry.tokenId,
-        ownerAddress: entry.ownerAddress,
-        balance: entry.balance.toString(),
-        updatedAt: params.updatedAt
-      }))
-  });
-
   await Promise.all(
-    [...affectedTokens].map((tokenId) =>
+    affectedTokens.map((tokenId) =>
       bumpTokenOwnerStateVersion({
         database: params.context.database,
         chainId: params.chainId,
@@ -1305,12 +1325,30 @@ async function materializeErc1155Balances(params: {
   );
 
   return {
-    replayedFromBlock,
+    replayedFromBlock: params.payload.fromBlock,
     snapshotBlock: params.payload.toBlock,
-    holderCount: [...balancesByKey.values()].filter((entry) => entry.balance > 0n).length,
-    tokenCount: new Set([...balancesByKey.values()].map((entry) => entry.tokenId)).size,
-    affectedTokens: [...affectedTokens].sort((left, right) => Number(left) - Number(right))
+    holderCount: totalHolderCount,
+    tokenCount: deltasByToken.size,
+    affectedTokens: affectedTokens.sort((left, right) => Number(left) - Number(right))
   };
+}
+
+function applyErc1155BalanceDeltaToMap(
+  map: Map<string, bigint>,
+  ownerAddress: string | null,
+  delta: bigint
+): void {
+  if (!ownerAddress || delta === 0n) {
+    return;
+  }
+
+  const next = (map.get(ownerAddress) ?? 0n) + delta;
+
+  if (next <= 0n) {
+    map.delete(ownerAddress);
+  } else {
+    map.set(ownerAddress, next);
+  }
 }
 
 async function materializeErc721Ownership(params: {
@@ -1328,47 +1366,49 @@ async function materializeErc721Ownership(params: {
   affectedTokens: string[];
 }> {
   const publicClient = getPublicClientForChain(params.chainId, params.context);
-  const replayedFromBlock = params.deployBlock ?? params.payload.fromBlock;
   const transfers = await readErc721TransfersInRange({
     client: publicClient,
     contractAddress: params.contractAddress,
-    fromBlock: replayedFromBlock,
+    fromBlock: params.payload.fromBlock,
     toBlock: params.payload.toBlock
   });
-  const ownershipsByToken = new Map<string, { tokenId: string; ownerAddress: string; updatedAt: Date }>();
-  const affectedTokens = new Set<string>();
+
+  // Derive the final ownership state for each token touched in this range.
+  // Transfers are ordered ascending, so iterating naturally yields the latest owner.
+  const finalOwnerByToken = new Map<string, string | null>();
 
   for (const transfer of transfers) {
-    if (transfer.blockNumber >= params.payload.fromBlock) {
-      affectedTokens.add(transfer.tokenId);
-    }
-
-    if (transfer.toAddress) {
-      ownershipsByToken.set(transfer.tokenId, {
-        tokenId: transfer.tokenId,
-        ownerAddress: transfer.toAddress,
-        updatedAt: params.updatedAt
-      });
-      continue;
-    }
-
-    ownershipsByToken.delete(transfer.tokenId);
+    finalOwnerByToken.set(transfer.tokenId, transfer.toAddress ?? null);
   }
 
-  await replaceErc721OwnershipForCollection(params.context.database, {
-    chainId: params.chainId,
-    contractAddress: params.contractAddress,
-    ownerships: [...ownershipsByToken.values()].map((ownership) => ({
-      chainId: params.chainId,
-      contractAddress: params.contractAddress,
-      tokenId: ownership.tokenId,
-      ownerAddress: ownership.ownerAddress,
-      updatedAt: ownership.updatedAt
-    }))
-  });
+  const liveTokens = [...finalOwnerByToken.entries()].filter(([, owner]) => owner !== null);
+  const burnedTokenIds = [...finalOwnerByToken.entries()]
+    .filter(([, owner]) => owner === null)
+    .map(([tokenId]) => tokenId);
+
+  await Promise.all([
+    ...liveTokens.map(([tokenId, ownerAddress]) =>
+      upsertErc721Ownership(params.context.database, {
+        chainId: params.chainId,
+        contractAddress: params.contractAddress,
+        tokenId,
+        ownerAddress: ownerAddress!,
+        updatedAt: params.updatedAt
+      })
+    ),
+    ...burnedTokenIds.map((tokenId) =>
+      deleteErc721Ownership(params.context.database, {
+        chainId: params.chainId,
+        contractAddress: params.contractAddress,
+        tokenId
+      })
+    )
+  ]);
+
+  const affectedTokens = [...finalOwnerByToken.keys()];
 
   await Promise.all(
-    [...affectedTokens].map((tokenId) =>
+    affectedTokens.map((tokenId) =>
       bumpTokenOwnerStateVersion({
         database: params.context.database,
         chainId: params.chainId,
@@ -1380,41 +1420,12 @@ async function materializeErc721Ownership(params: {
   );
 
   return {
-    replayedFromBlock,
+    replayedFromBlock: params.payload.fromBlock,
     snapshotBlock: params.payload.toBlock,
-    ownerCount: new Set([...ownershipsByToken.values()].map((entry) => entry.ownerAddress)).size,
-    tokenCount: ownershipsByToken.size,
-    affectedTokens: [...affectedTokens].sort((left, right) => Number(left) - Number(right))
+    ownerCount: new Set(liveTokens.map(([, owner]) => owner)).size,
+    tokenCount: finalOwnerByToken.size,
+    affectedTokens: affectedTokens.sort((left, right) => Number(left) - Number(right))
   };
-}
-
-function applyErc1155BalanceDelta(params: {
-  balancesByKey: Map<string, { tokenId: string; ownerAddress: string; balance: bigint }>;
-  tokenId: string;
-  ownerAddress: string | null;
-  delta: bigint;
-}): void {
-  if (!params.ownerAddress || params.delta === 0n) {
-    return;
-  }
-
-  const key = `${params.tokenId}:${params.ownerAddress}`;
-  const existing = params.balancesByKey.get(key);
-
-  if (!existing) {
-    params.balancesByKey.set(key, {
-      tokenId: params.tokenId,
-      ownerAddress: params.ownerAddress,
-      balance: params.delta
-    });
-    return;
-  }
-
-  existing.balance += params.delta;
-
-  if (existing.balance === 0n) {
-    params.balancesByKey.delete(key);
-  }
 }
 
 function applyErc1155TokenBalanceDelta(params: {

@@ -711,7 +711,10 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
   ],
   erc721_ownership: [
     { key: { chainId: 1, contractAddress: 1, tokenId: 1 }, name: "uniq_token_owner", unique: true },
-    { key: { ownerAddress: 1, contractAddress: 1 }, name: "owner_contract_lookup" }
+    { key: { ownerAddress: 1, contractAddress: 1 }, name: "owner_contract_lookup" },
+    // Covers the wallet-inventory sort pattern: filter by owner+chain, return in updatedAt order without
+    // a blocking in-memory sort.
+    { key: { ownerAddress: 1, chainId: 1, updatedAt: -1, _id: -1 }, name: "owner_chain_sort" }
   ],
   erc1155_balances: [
     {
@@ -720,7 +723,9 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
       unique: true
     },
     { key: { chainId: 1, contractAddress: 1, tokenId: 1, updatedAt: -1 }, name: "token_updated_at_desc" },
-    { key: { ownerAddress: 1, contractAddress: 1 }, name: "owner_contract_balance_lookup" }
+    { key: { ownerAddress: 1, contractAddress: 1 }, name: "owner_contract_balance_lookup" },
+    // Same sort-covering index for the wallet-inventory pattern on balances.
+    { key: { ownerAddress: 1, chainId: 1, updatedAt: -1, _id: -1 }, name: "owner_chain_sort" }
   ],
   metadata_versions: [
     { key: { tokenRef: 1, version: -1 }, name: "token_version_desc", unique: true },
@@ -1460,6 +1465,22 @@ export async function listErc1155Balances(params: {
     .toArray();
 }
 
+export async function findAllErc1155BalancesForToken(params: {
+  database: Db;
+  chainId: number;
+  contractAddress: string;
+  tokenId: string;
+}): Promise<Erc1155BalanceDocument[]> {
+  return getMongoCollections(params.database)
+    .erc1155Balances.find({
+      chainId: params.chainId,
+      contractAddress: normalizeContractAddress(params.contractAddress),
+      tokenId: params.tokenId,
+      balance: { $ne: "0" }
+    })
+    .toArray();
+}
+
 export async function listErc1155BalancesByOwner(params: {
   database: Db;
   chainId: number;
@@ -1569,6 +1590,9 @@ export async function listErc1155BalancesByOwner(params: {
     });
   }
 
+  // Same guard as the ERC-721 variant: bound the candidate set before the per-document $lookup.
+  const preLimit = Math.min((params.limit ?? 100) * 10, 5000);
+
   return getMongoCollections(params.database).erc1155Balances.aggregate<Erc1155BalanceDocument>([
     {
       $match: finalQuery
@@ -1578,6 +1602,9 @@ export async function listErc1155BalancesByOwner(params: {
         updatedAt: -1,
         _id: -1
       }
+    },
+    {
+      $limit: preLimit
     },
     {
       $lookup: {
@@ -1717,6 +1744,11 @@ export async function listErc721OwnershipByOwner(params: {
     });
   }
 
+  // Bound the number of ownership records examined before the per-document $lookup to prevent
+  // unbounded scans on large wallets when token filters are active.  Heavily selective filters
+  // (e.g. a rare trait on a huge wallet) may return underfull pages as a trade-off.
+  const preLimit = Math.min((params.limit ?? 100) * 10, 5000);
+
   return getMongoCollections(params.database).erc721Ownership.aggregate<Erc721OwnershipDocument>([
     {
       $match: finalQuery
@@ -1726,6 +1758,9 @@ export async function listErc721OwnershipByOwner(params: {
         updatedAt: -1,
         _id: -1
       }
+    },
+    {
+      $limit: preLimit
     },
     {
       $lookup: {
@@ -1902,6 +1937,17 @@ export async function findErc721OwnershipByToken(params: {
   tokenId: string;
 }): Promise<Erc721OwnershipDocument | null> {
   return getMongoCollections(params.database).erc721Ownership.findOne({
+    chainId: params.chainId,
+    contractAddress: normalizeContractAddress(params.contractAddress),
+    tokenId: params.tokenId
+  });
+}
+
+export async function deleteErc721Ownership(
+  database: Db,
+  params: { chainId: number; contractAddress: string; tokenId: string }
+): Promise<void> {
+  await getMongoCollections(database).erc721Ownership.deleteOne({
     chainId: params.chainId,
     contractAddress: normalizeContractAddress(params.contractAddress),
     tokenId: params.tokenId
