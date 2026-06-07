@@ -12,6 +12,7 @@
   "scripts": {
     "api:request": "tsx scripts/hmac-request.ts",
     "db:init": "tsx scripts/init-db.ts",
+    "db:ensure-indexes": "tsx scripts/ensure-indexes.ts",
     "smoke:refresh": "tsx scripts/smoke-refresh-jobs.ts",
     "smoke:fixtures": "tsx scripts/smoke-validated-fixtures.ts",
     "smoke:reindex-erc721": "tsx scripts/smoke-reindex-erc721.ts",
