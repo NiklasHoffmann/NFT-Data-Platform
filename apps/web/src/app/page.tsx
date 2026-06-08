@@ -262,6 +262,7 @@ export default async function HomePage(props: {
 
     pollingReason = getPollingReason({
       bannerStatus,
+      requestedTokenId: parsedQuery.data.tokenId ?? null,
       collection,
       token,
       jobRecords
@@ -1265,6 +1266,7 @@ function firstValue(value: string | string[] | undefined): string | undefined {
 
 function getPollingReason(params: {
   bannerStatus: "loaded" | "queued" | "invalid" | "not-found" | "unresolved" | "failed" | undefined;
+  requestedTokenId: string | null;
   collection: Awaited<ReturnType<typeof serializeEnrichedCollection>> | null;
   token: Awaited<ReturnType<typeof serializeEnrichedToken>> | null;
   jobRecords: Array<ReturnType<typeof serializeJobDocument>>;
@@ -1273,10 +1275,6 @@ function getPollingReason(params: {
 
   if (activeJob) {
     return `Job ${activeJob.type} is ${activeJob.status}. The page refreshes until MongoDB reflects the next state.`;
-  }
-
-  if (params.bannerStatus === "queued") {
-    return "Discovery is queued. Waiting for token, metadata, and media documents to arrive.";
   }
 
   if (params.collection && ["pending", "syncing"].includes(params.collection.syncStatus)) {
@@ -1289,6 +1287,20 @@ function getPollingReason(params: {
 
   if (params.token && ["pending", "processing"].includes(params.token.mediaStatus)) {
     return "Media processing is still running. Assets appear automatically once they are stored.";
+  }
+
+  if (params.bannerStatus === "queued") {
+    if (params.requestedTokenId) {
+      if (!params.token) {
+        return "Discovery is queued. Waiting for token documents to arrive.";
+      }
+
+      return null;
+    }
+
+    if (!params.collection) {
+      return "Discovery is queued. Waiting for collection documents to arrive.";
+    }
   }
 
   return null;
