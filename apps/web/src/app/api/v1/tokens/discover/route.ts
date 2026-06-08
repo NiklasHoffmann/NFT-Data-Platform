@@ -8,6 +8,7 @@ import {
   safeParseJsonRequestBody
 } from "../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
+import { guardContractAddress } from "../../../../../lib/contract-address-guard";
 import { serializeEnrichedCollections } from "../../../../../lib/collection-response";
 import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { enqueueRefreshTokenJob } from "../../../../../lib/queue";
@@ -64,6 +65,7 @@ const postHandler = withAuthenticatedRoute(["tokens:read", "refresh:token"], asy
   const collectionsByIdentity = new Map(
     serializedCollections.map((collection) => [`${collection.chainId}:${collection.contractAddress}`, collection])
   );
+  const contractGuardByIdentity = new Map<string, Promise<Awaited<ReturnType<typeof guardContractAddress>>>>();
   const now = new Date();
 
   const responseItems = await Promise.all(requestedItems.map(async (item) => {
@@ -82,6 +84,30 @@ const postHandler = withAuthenticatedRoute(["tokens:read", "refresh:token"], asy
         jobId: null,
         token,
         collection
+      };
+    }
+
+    const guardPromise =
+      contractGuardByIdentity.get(collectionIdentity) ??
+      guardContractAddress({
+        chainId: item.chainId,
+        contractAddress: item.contractAddress
+      });
+
+    contractGuardByIdentity.set(collectionIdentity, guardPromise);
+    const contractGuardResult = await guardPromise;
+
+    if (!contractGuardResult.ok) {
+      return {
+        chainId: item.chainId,
+        contractAddress: item.contractAddress,
+        tokenId: item.tokenId,
+        discoveryStatus: "failed" as const,
+        queuedJobId: null,
+        jobId: null,
+        token: null,
+        collection: null,
+        message: contractGuardResult.message
       };
     }
 

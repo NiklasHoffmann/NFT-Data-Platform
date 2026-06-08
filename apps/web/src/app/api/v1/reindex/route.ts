@@ -3,6 +3,7 @@ import { createJob } from "@nft-platform/db";
 import { reindexRangeJobSchema } from "@nft-platform/queue";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
 import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../lib/api-validation";
+import { guardContractAddress } from "../../../../lib/contract-address-guard";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { enqueueReindexRangeJob } from "../../../../lib/queue";
 
@@ -25,6 +26,22 @@ const postHandler = withAuthenticatedRoute(["reindex:write"], async ({ auth }) =
   }
 
   const validatedPayload = validatedPayloadResult.data;
+  const contractGuardResult = await guardContractAddress({
+    chainId: validatedPayload.chainId,
+    contractAddress: validatedPayload.contractAddress
+  });
+
+  if (!contractGuardResult.ok) {
+    return Response.json(
+      {
+        ok: false,
+        error: "invalid_contract_address",
+        message: contractGuardResult.message
+      },
+      { status: 400 }
+    );
+  }
+
   const timestamp = new Date();
   const database = getWebMongoDatabase();
   const queuedJob = await enqueueReindexRangeJob(validatedPayload);

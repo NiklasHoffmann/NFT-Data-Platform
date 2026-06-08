@@ -2,6 +2,7 @@ import { createJob, findCollectionByIdentity, findJobByQueueJobId, findTokenById
 import { evmAddressSchema, evmTokenIdSchema, normalizeContractAddress } from "@nft-platform/domain";
 import { refreshCollectionJobSchema, refreshTokenJobSchema } from "@nft-platform/queue";
 import { z } from "zod";
+import { guardContractAddress } from "../lib/contract-address-guard";
 import { getWebMongoDatabase } from "../lib/mongodb";
 import { enqueueRefreshCollectionJob, enqueueRefreshTokenJob } from "../lib/queue";
 
@@ -38,6 +39,21 @@ export async function handleDiscoverSubmission(formData: FormData): Promise<Disc
   const database = getWebMongoDatabase();
   const timestamp = new Date();
   const normalizedContractAddress = normalizeContractAddress(parsed.data.contractAddress);
+  const contractGuardResult = await guardContractAddress({
+    chainId: parsed.data.chainId,
+    contractAddress: normalizedContractAddress
+  });
+
+  if (!contractGuardResult.ok) {
+    return {
+      chainId: parsed.data.chainId,
+      contractAddress: normalizedContractAddress,
+      ...(parsed.data.tokenId ? { tokenId: parsed.data.tokenId } : {}),
+      status: "invalid",
+      message: contractGuardResult.message
+    };
+  }
+
   const collectionPayload = refreshCollectionJobSchema.parse({
     chainId: parsed.data.chainId,
     contractAddress: normalizedContractAddress,

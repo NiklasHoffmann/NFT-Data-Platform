@@ -4,6 +4,7 @@ import { refreshTokenJobSchema } from "@nft-platform/queue";
 import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
 import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../../lib/api-validation";
+import { guardContractAddress } from "../../../../../lib/contract-address-guard";
 import { enqueueRefreshTokenJob } from "../../../../../lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,22 @@ const postHandler = withAuthenticatedRoute(["refresh:token"], async ({ auth }) =
   }
 
   const validatedPayload = validatedPayloadResult.data;
+  const contractGuardResult = await guardContractAddress({
+    chainId: validatedPayload.chainId,
+    contractAddress: validatedPayload.contractAddress
+  });
+
+  if (!contractGuardResult.ok) {
+    return Response.json(
+      {
+        ok: false,
+        error: "invalid_contract_address",
+        message: contractGuardResult.message
+      },
+      { status: 400 }
+    );
+  }
+
   const timestamp = new Date();
   const database = getWebMongoDatabase();
   const queuedJob = await enqueueRefreshTokenJob(validatedPayload);
