@@ -64,7 +64,7 @@ export async function handleDiscoverSubmission(formData: FormData): Promise<Disc
       contractAddress: normalizedContractAddress,
       tokenId: parsed.data.tokenId,
       forceMetadata: true,
-      forceOwnership: true
+      forceOwnership: false
     });
     const queuedToken = await enqueueRefreshTokenJob(tokenPayload);
 
