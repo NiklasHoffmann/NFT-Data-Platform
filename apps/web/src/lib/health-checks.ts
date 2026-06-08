@@ -16,11 +16,17 @@ const globalStorageRegistry = globalThis as typeof globalThis & {
   __nftPlatformStorageClients__?: Map<string, S3Client>;
 };
 
+const HEALTH_PROBE_TIMEOUT_MS = 2_500;
+
 export async function probeMongoHealth(): Promise<DependencyHealth> {
   const startedAt = Date.now();
 
   try {
-    await getWebMongoDatabase().command({ ping: 1 });
+    await withTimeout(
+      getWebMongoDatabase().command({ ping: 1 }),
+      HEALTH_PROBE_TIMEOUT_MS,
+      "mongodb"
+    );
 
     return {
       dependency: "mongodb",
@@ -45,8 +51,14 @@ export async function probeRedisHealth(): Promise<DependencyHealth> {
 
   try {
     const redis = getRedisClient();
-    await redis.connect().catch(() => undefined);
-    await redis.ping();
+    await withTimeout(
+      (async () => {
+        await redis.connect().catch(() => undefined);
+        await redis.ping();
+      })(),
+      HEALTH_PROBE_TIMEOUT_MS,
+      "redis"
+    );
 
     return {
       dependency: "redis",
@@ -68,6 +80,8 @@ export async function probeRedisHealth(): Promise<DependencyHealth> {
 
 export async function probeStorageHealth(): Promise<DependencyHealth> {
   const startedAt = Date.now();
+  const abortController = new AbortController();
+  const timeoutHandle = setTimeout(() => abortController.abort(), HEALTH_PROBE_TIMEOUT_MS);
 
   try {
     const config = getWebRuntimeConfig();
@@ -75,7 +89,10 @@ export async function probeStorageHealth(): Promise<DependencyHealth> {
     await client.send(
       new HeadBucketCommand({
         Bucket: config.storageBucket
-      })
+      }),
+      {
+        abortSignal: abortController.signal
+      }
     );
 
     return {
@@ -93,6 +110,27 @@ export async function probeStorageHealth(): Promise<DependencyHealth> {
       latencyMs: Date.now() - startedAt,
       message: toSafeHealthErrorMessage(error)
     };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, dependency: string): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${dependency}_health_timeout`));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
   }
 }
 
