@@ -875,6 +875,10 @@ function topicToAddress(topic: string): Address | undefined {
 type Erc1155SingleLogs = Awaited<ReturnType<typeof fetchErc1155TransferSingleLogs>>;
 type Erc1155BatchLogs = Awaited<ReturnType<typeof fetchErc1155TransferBatchLogs>>;
 
+const erc1155RateLimitMaxRetries = 4;
+const erc1155RateLimitInitialBackoffMs = 1_000;
+const erc1155RateLimitMaxBackoffMs = 12_000;
+
 async function fetchErc1155TransferSingleLogs(params: {
   client: PublicClient;
   address: Address;
@@ -908,21 +912,41 @@ async function readErc1155LogsForWindowWithFallback(params: {
   address: Address;
   fromBlock: bigint;
   toBlock: bigint;
+  rateLimitRetryAttempt?: number;
 }): Promise<{
   singleLogs: Erc1155SingleLogs;
   batchLogs: Erc1155BatchLogs;
 }> {
   try {
-    const [singleLogs, batchLogs] = await Promise.all([
-      fetchErc1155TransferSingleLogs(params),
-      fetchErc1155TransferBatchLogs(params)
-    ]);
+    // Query transfer events sequentially to reduce peak request bursts per range.
+    const singleLogs = await fetchErc1155TransferSingleLogs(params);
+    const batchLogs = await fetchErc1155TransferBatchLogs(params);
 
     return {
       singleLogs,
       batchLogs
     };
   } catch (error) {
+    if (isRateLimitedRpcError(error)) {
+      const retryAttempt = params.rateLimitRetryAttempt ?? 0;
+
+      if (retryAttempt < erc1155RateLimitMaxRetries) {
+        const backoffMs = Math.min(
+          erc1155RateLimitInitialBackoffMs * 2 ** retryAttempt,
+          erc1155RateLimitMaxBackoffMs
+        );
+
+        await delay(backoffMs);
+
+        return readErc1155LogsForWindowWithFallback({
+          ...params,
+          rateLimitRetryAttempt: retryAttempt + 1
+        });
+      }
+
+      throw error;
+    }
+
     if (params.fromBlock >= params.toBlock) {
       console.warn("[chain] failed to read ERC-1155 logs for block", {
         blockNumber: Number(params.fromBlock),
@@ -937,24 +961,46 @@ async function readErc1155LogsForWindowWithFallback(params: {
     }
 
     const middleBlock = params.fromBlock + (params.toBlock - params.fromBlock) / 2n;
-    const [leftWindow, rightWindow] = await Promise.all([
-      readErc1155LogsForWindowWithFallback({
-        client: params.client,
-        address: params.address,
-        fromBlock: params.fromBlock,
-        toBlock: middleBlock
-      }),
-      readErc1155LogsForWindowWithFallback({
-        client: params.client,
-        address: params.address,
-        fromBlock: middleBlock + 1n,
-        toBlock: params.toBlock
-      })
-    ]);
+    const leftWindow = await readErc1155LogsForWindowWithFallback({
+      client: params.client,
+      address: params.address,
+      fromBlock: params.fromBlock,
+      toBlock: middleBlock
+    });
+    const rightWindow = await readErc1155LogsForWindowWithFallback({
+      client: params.client,
+      address: params.address,
+      fromBlock: middleBlock + 1n,
+      toBlock: params.toBlock
+    });
 
     return {
       singleLogs: [...leftWindow.singleLogs, ...rightWindow.singleLogs],
       batchLogs: [...leftWindow.batchLogs, ...rightWindow.batchLogs]
     };
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRateLimitedRpcError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeStatus = "status" in error ? (error as { status?: unknown }).status : undefined;
+
+  if (maybeStatus === 429) {
+    return true;
+  }
+
+  const message = "message" in error ? String((error as { message?: unknown }).message ?? "") : "";
+  const details = "details" in error ? String((error as { details?: unknown }).details ?? "") : "";
+  const combined = `${message} ${details}`.toLowerCase();
+
+  return combined.includes("429") || combined.includes("too many requests");
 }
