@@ -1061,15 +1061,17 @@ async function handleReindexRange(
   }
 
   const now = new Date();
-  const collection = await findCollectionByIdentity({
-    database: context.database,
-    chainId: payload.chainId,
-    contractAddress: payload.contractAddress
-  });
-
-  if (!collection) {
-    throw new Error("Collection is not registered. Run refresh/collection first.");
-  }
+  const collection =
+    (await findCollectionByIdentity({
+      database: context.database,
+      chainId: payload.chainId,
+      contractAddress: payload.contractAddress
+    })) ??
+    (await ensureCollectionRegistration(
+      { chainId: payload.chainId, contractAddress: payload.contractAddress, fullRescan: false },
+      context,
+      null
+    ));
 
   const ownerSyncResult =
     collection.standard === "erc1155"
