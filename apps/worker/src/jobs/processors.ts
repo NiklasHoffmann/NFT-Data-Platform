@@ -373,8 +373,8 @@ async function handleRefreshToken(
 
   const shouldMaterializeErc1155Balances =
     collection.standard === "erc1155" &&
-    (payload.forceOwnership ||
-      (onChainToken.supplyQuantity === null && (hasOnChainErc1155Uri || erc1155TokenExists === true)));
+    payload.forceOwnership &&
+    (onChainToken.supplyQuantity === null || hasOnChainErc1155Uri || erc1155TokenExists === true);
 
   const erc1155BalanceSnapshot = shouldMaterializeErc1155Balances
     ? await materializeErc1155BalancesForToken({
@@ -399,7 +399,7 @@ async function handleRefreshToken(
     throw new Error("Token not found on chain.");
   }
 
-  if (collection.standard === "erc1155" && erc1155TokenExists !== true) {
+  if (collection.standard === "erc1155" && erc1155TokenExists === false) {
     await removeMissingTokenFromReadModel({
       collection,
       existingToken,
@@ -781,6 +781,12 @@ async function detectErc1155TokenExistence(params: {
 
   if (existsOnChain === true) {
     return true;
+  }
+
+  // For default discovery flows, avoid an expensive full-history scan.
+  // Deep transfer activity checks are only used when ownership hydration is explicitly requested.
+  if (!params.payload.forceOwnership) {
+    return null;
   }
 
   return hasErc1155TokenTransferActivity({

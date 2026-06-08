@@ -90,7 +90,7 @@ const postHandler = withAuthenticatedRoute(["tokens:read", "refresh:token"], asy
       contractAddress: item.contractAddress,
       tokenId: item.tokenId,
       forceMetadata: true,
-      forceOwnership: true
+      forceOwnership: false
     });
     const jobId = await createJob(database, {
       queueJobId: queuedJob.jobId,
@@ -100,7 +100,7 @@ const postHandler = withAuthenticatedRoute(["tokens:read", "refresh:token"], asy
         contractAddress: item.contractAddress,
         tokenId: item.tokenId,
         forceMetadata: true,
-        forceOwnership: true
+        forceOwnership: false
       },
       status: queuedJob.status,
       attempts: queuedJob.attempts,
