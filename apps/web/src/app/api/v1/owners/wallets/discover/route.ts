@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
-import { createJob, findTokensByIdentities, getMongoCollections } from "@nft-platform/db";
+import { findTokensByIdentities, getMongoCollections } from "@nft-platform/db";
 import { evmAddressSchema, evmTokenIdSchema } from "@nft-platform/domain";
 import { z } from "zod";
+import { buildApiSuccessResponse } from "../../../../../../lib/api-response";
 import {
   buildValidationErrorResponse,
   buildValidationIssues,
@@ -11,6 +12,10 @@ import { withAuthenticatedRoute } from "../../../../../../lib/api-auth";
 import { serializeEnrichedCollections } from "../../../../../../lib/collection-response";
 import { getWebMongoDatabase } from "../../../../../../lib/mongodb";
 import { enqueueRefreshTokenJob } from "../../../../../../lib/queue";
+import {
+  mapQueueBackedDiscoveryStatus,
+  persistQueueBackedJobRecord
+} from "../../../../../../services/jobs/queue-job-service";
 import { serializeEnrichedTokens } from "../../../../../../lib/token-response";
 
 export const dynamic = "force-dynamic";
@@ -103,21 +108,19 @@ const postHandler = withAuthenticatedRoute(["owners:read", "refresh:token"], asy
       forceMetadata: true,
       forceOwnership: true
     });
-    const jobId = await createJob(database, {
-      queueJobId: queuedJob.jobId,
+    const queuedPayload = {
+      chainId: item.chainId,
+      contractAddress: item.contractAddress,
+      tokenId: item.tokenId,
+      forceMetadata: true,
+      forceOwnership: true
+    } satisfies Record<string, unknown>;
+    const persistedJob = await persistQueueBackedJobRecord({
+      database,
+      queuedJob,
       type: "refresh-token",
-      payload: {
-        chainId: item.chainId,
-        contractAddress: item.contractAddress,
-        tokenId: item.tokenId,
-        forceMetadata: true,
-        forceOwnership: true
-      },
-      status: queuedJob.status,
-      attempts: queuedJob.attempts,
-      lastError: queuedJob.lastError,
-      createdAt: now,
-      updatedAt: now
+      payload: queuedPayload,
+      now
     });
 
     return {
@@ -125,16 +128,15 @@ const postHandler = withAuthenticatedRoute(["owners:read", "refresh:token"], asy
       contractAddress: item.contractAddress,
       tokenId: item.tokenId,
       ownerAddress: validatedPayload.ownerAddress,
-      discoveryStatus: queuedJob.status === "failed" ? "failed" as const : "queued" as const,
+      discoveryStatus: mapQueueBackedDiscoveryStatus(queuedJob.status),
       queuedJobId: queuedJob.jobId,
-      jobId: jobId.toHexString(),
+      jobId: persistedJob.jobId,
       token: null,
       collection: null
     };
   }));
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     ownerAddress: validatedPayload.ownerAddress,
     summary: {
       total: responseItems.length,

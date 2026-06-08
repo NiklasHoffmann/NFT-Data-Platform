@@ -32,6 +32,12 @@ const tokenScopedJobTypes = ["refresh-token", "refresh-media"] as const;
 const collectionScopedJobTypes = ["refresh-collection", "reindex-range"] as const;
 const homeViewSchema = z.enum(["nft", "collection", "jobs", "raw", "operations"]);
 const webRuntimeConfig = getWebRuntimeConfig();
+const randomTokenSampleSize = 18;
+const randomTokenSampleTtlMs = 10 * 60 * 1000;
+
+const globalRandomTokenSampleRegistry = globalThis as typeof globalThis & {
+  __nftPlatformRandomTokenSamples__?: Map<string, { tokenIds: string[]; expiresAt: number }>;
+};
 
 export const dynamic = "force-dynamic";
 
@@ -209,20 +215,12 @@ export default async function HomePage(props: {
 
     if (tokenDocument && parsedQuery.data.tokenId) {
       if (activeView === "nft") {
-        const randomTokenDocuments = await collections.tokens.aggregate<TokenDocument>([
-          {
-            $match: {
-              contractAddress: {
-                $ne: normalizedContractAddress
-              }
-            }
-          },
-          {
-            $sample: {
-              size: 18
-            }
-          }
-        ]).toArray();
+        const randomTokenDocuments = await loadStableRandomTokenSample({
+          collections,
+          sampleKey: `${parsedQuery.data.chainId ?? 11155111}:${normalizedContractAddress}:${parsedQuery.data.tokenId}`,
+          excludedContractAddress: normalizedContractAddress,
+          size: randomTokenSampleSize
+        });
         randomTokenCards = await buildTokenCardData(database, randomTokenDocuments);
       }
 
@@ -1377,9 +1375,10 @@ function renderCollectionTokenCard(params: {
   const { collectionToken, collectionStandard } = params;
   const tokenHref = buildIndexedTokenHref(collectionToken.token);
   const tokenLabel = collectionToken.name ?? `Token ${collectionToken.tokenId}`;
+  const tokenCardKey = `${collectionToken.token.chainId}:${collectionToken.token.contractAddress}:${collectionToken.token.tokenId}`;
 
   return (
-    <div key={collectionToken.tokenId} className="asset-card collection-token-card">
+    <div key={tokenCardKey} className="asset-card collection-token-card">
       <div className="collection-token-card__media">
         <div className="collection-token-card__media-actions">
           <a href={tokenHref} className="detail-link collection-token-card__open-link">
@@ -2694,6 +2693,57 @@ function buildHomeHref(params: {
 
   const query = searchParams.toString();
   return query ? `/?${query}` : "/";
+}
+
+async function loadStableRandomTokenSample(params: {
+  collections: ReturnType<typeof getMongoCollections>;
+  sampleKey: string;
+  excludedContractAddress: string;
+  size: number;
+}): Promise<TokenDocument[]> {
+  const registry = (globalRandomTokenSampleRegistry.__nftPlatformRandomTokenSamples__ ??= new Map());
+  const now = Date.now();
+  const cachedSample = registry.get(params.sampleKey);
+
+  if (cachedSample && cachedSample.expiresAt > now && cachedSample.tokenIds.length > 0) {
+    const cachedObjectIds = cachedSample.tokenIds.map((tokenId) => new ObjectId(tokenId));
+    const cachedTokenDocuments = await params.collections.tokens.find({
+      _id: { $in: cachedObjectIds },
+      contractAddress: { $ne: params.excludedContractAddress }
+    }).toArray();
+    const cachedTokenById = new Map(
+      cachedTokenDocuments.map((document) => [document._id.toHexString(), document])
+    );
+    const orderedCachedTokens = cachedSample.tokenIds
+      .map((tokenId) => cachedTokenById.get(tokenId))
+      .filter((document): document is TokenDocument => Boolean(document));
+
+    if (orderedCachedTokens.length > 0) {
+      return orderedCachedTokens.slice(0, params.size);
+    }
+  }
+
+  const sampledTokenDocuments = await params.collections.tokens.aggregate<TokenDocument>([
+    {
+      $match: {
+        contractAddress: {
+          $ne: params.excludedContractAddress
+        }
+      }
+    },
+    {
+      $sample: {
+        size: params.size
+      }
+    }
+  ]).toArray();
+
+  registry.set(params.sampleKey, {
+    tokenIds: sampledTokenDocuments.map((document) => document._id.toHexString()),
+    expiresAt: now + randomTokenSampleTtlMs
+  });
+
+  return sampledTokenDocuments;
 }
 
 function JsonPanel(props: { title: string; data: unknown; compact?: boolean }) {

@@ -3,6 +3,7 @@ import { mediaStatusSchema, metadataStatusSchema } from "@nft-platform/domain";
 import { listTokens } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import { buildApiSuccessResponse } from "../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
@@ -103,8 +104,7 @@ const getHandler = withAuthenticatedRoute(["tokens:read"], async ({ request }) =
   const lastPageToken = pageTokens.at(-1);
   const nextCursor = hasMore && lastPageToken ? encodeUpdatedAtCursor(lastPageToken) : null;
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     items: await serializeEnrichedTokens(database, pageTokens),
     pageInfo: {
       limit: parsedQuery.limit,

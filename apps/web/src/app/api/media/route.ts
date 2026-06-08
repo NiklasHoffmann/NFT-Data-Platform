@@ -1,6 +1,12 @@
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { NextRequest } from "next/server";
+import { buildApiErrorResponse } from "../../../lib/api-response";
 import { getWebRuntimeConfig } from "../../../lib/env";
+import {
+  attachPublicRateLimitHeaders,
+  consumePublicRateLimit,
+  type PublicRateLimitResult
+} from "../../../lib/public-rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -17,19 +23,50 @@ const passthroughHeaders = [
 ] as const;
 
 export async function GET(request: NextRequest): Promise<Response> {
+  const config = getWebRuntimeConfig();
+  const rateLimit = await consumePublicRateLimit({
+    request,
+    namespace: "media",
+    limitPerMinute: config.publicReadRateLimitPerMinute
+  });
+
+  if (!rateLimit.allowed) {
+    return finalizeResponse(
+      buildApiErrorResponse({
+        error: "rate_limit_exceeded",
+        message: "Too many requests for media preview endpoints.",
+        status: 429
+      }),
+      rateLimit
+    );
+  }
+
   const target = request.nextUrl.searchParams.get("url");
 
   if (!target) {
-    return Response.json({ error: "Missing media url." }, { status: 400 });
+    return finalizeResponse(
+      buildApiErrorResponse({
+        error: "missing_media_url",
+        message: "Missing media url.",
+        status: 400
+      }),
+      rateLimit
+    );
   }
 
   const targetUrl = safeParseUrl(target);
 
   if (!targetUrl || !isAllowedMediaProxyTarget(targetUrl)) {
-    return Response.json({ error: "Unsupported media url." }, { status: 400 });
+    return finalizeResponse(
+      buildApiErrorResponse({
+        error: "unsupported_media_url",
+        message: "Unsupported media url.",
+        status: 400
+      }),
+      rateLimit
+    );
   }
 
-  const config = getWebRuntimeConfig();
   const storageObjectKey = resolveStorageObjectKey({
     targetUrl,
     mediaPublicBaseUrl: config.mediaPublicBaseUrl
@@ -47,7 +84,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     });
 
     if (storageResponse) {
-      return storageResponse;
+      return finalizeResponse(storageResponse, rateLimit);
     }
   }
 
@@ -60,10 +97,24 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   if (upstream instanceof Error) {
     if (upstream.name === "TimeoutError" || upstream.name === "AbortError") {
-      return Response.json({ error: "Media proxy upstream timed out." }, { status: 504 });
+      return finalizeResponse(
+        buildApiErrorResponse({
+          error: "upstream_timeout",
+          message: "Media proxy upstream timed out.",
+          status: 504
+        }),
+        rateLimit
+      );
     }
 
-    return Response.json({ error: "Media proxy request failed." }, { status: 502 });
+    return finalizeResponse(
+      buildApiErrorResponse({
+        error: "upstream_request_failed",
+        message: "Media proxy request failed.",
+        status: 502
+      }),
+      rateLimit
+    );
   }
 
   const responseHeaders = new Headers();
@@ -79,11 +130,11 @@ export async function GET(request: NextRequest): Promise<Response> {
   responseHeaders.set("x-media-proxy", "1");
   responseHeaders.set("x-content-type-options", "nosniff");
 
-  return new Response(upstream.body, {
+  return finalizeResponse(new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders
-  });
+  }), rateLimit);
 }
 
 function buildUpstreamHeaders(request: NextRequest): Headers {
@@ -166,11 +217,19 @@ async function fetchStorageObject(params: {
     const statusCode = extractStorageErrorStatusCode(result);
 
     if (statusCode === 404) {
-      return Response.json({ error: "Media asset not found in storage." }, { status: 404 });
+      return buildApiErrorResponse({
+        error: "storage_asset_not_found",
+        message: "Media asset not found in storage.",
+        status: 404
+      });
     }
 
     if (statusCode === 416) {
-      return Response.json({ error: "Requested media range is invalid." }, { status: 416 });
+      return buildApiErrorResponse({
+        error: "invalid_media_range",
+        message: "Requested media range is invalid.",
+        status: 416
+      });
     }
 
     return null;
@@ -181,7 +240,11 @@ async function fetchStorageObject(params: {
     : null;
 
   if (!body) {
-    return Response.json({ error: "Media asset body is unavailable." }, { status: 502 });
+    return buildApiErrorResponse({
+      error: "storage_asset_body_unavailable",
+      message: "Media asset body is unavailable.",
+      status: 502
+    });
   }
 
   const responseHeaders = new Headers();
@@ -201,6 +264,11 @@ async function fetchStorageObject(params: {
     status: result.$metadata.httpStatusCode ?? 200,
     headers: responseHeaders
   });
+}
+
+function finalizeResponse(response: Response, rateLimit: PublicRateLimitResult): Response {
+  attachPublicRateLimitHeaders(response, rateLimit);
+  return response;
 }
 
 function resolveStorageObjectKey(params: {

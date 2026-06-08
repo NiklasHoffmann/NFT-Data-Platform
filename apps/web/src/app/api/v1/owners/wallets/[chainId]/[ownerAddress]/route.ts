@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { evmAddressSchema } from "@nft-platform/domain";
+import { buildApiErrorResponse, buildApiSuccessResponse } from "../../../../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../../../lib/api-auth";
 import { getWebMongoDatabase } from "../../../../../../../lib/mongodb";
@@ -36,27 +37,21 @@ const getHandler = withAuthenticatedRoute<WalletOwnersRouteContext>(["owners:rea
   const chainId = Number(params.chainId);
 
   if (!Number.isInteger(chainId) || chainId <= 0) {
-    return Response.json(
-      {
-        ok: false,
-        error: "invalid_chain_id",
-        message: "The chainId path parameter must be a positive integer."
-      },
-      { status: 400 }
-    );
+    return buildApiErrorResponse({
+      error: "invalid_chain_id",
+      message: "The chainId path parameter must be a positive integer.",
+      status: 400
+    });
   }
 
   const parsedOwnerAddress = evmAddressSchema.safeParse(params.ownerAddress);
 
   if (!parsedOwnerAddress.success) {
-    return Response.json(
-      {
-        ok: false,
-        error: "invalid_owner_address",
-        message: "The ownerAddress path parameter must be a valid EVM address."
-      },
-      { status: 400 }
-    );
+    return buildApiErrorResponse({
+      error: "invalid_owner_address",
+      message: "The ownerAddress path parameter must be a valid EVM address.",
+      status: 400
+    });
   }
 
   const database = getWebMongoDatabase();
@@ -87,10 +82,7 @@ const getHandler = withAuthenticatedRoute<WalletOwnersRouteContext>(["owners:rea
     ...(cursor ? { cursor } : {})
   });
 
-  return Response.json({
-    ok: true,
-    ...inventory
-  });
+  return buildApiSuccessResponse(inventory);
 });
 
 export async function GET(request: NextRequest, context: WalletOwnersRouteContext): Promise<Response> {

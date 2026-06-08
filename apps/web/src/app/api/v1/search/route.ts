@@ -3,7 +3,12 @@ import { mediaStatusSchema, metadataStatusSchema } from "@nft-platform/domain";
 import { listCollections, listTokens } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
-import { safeDecodeUpdatedAtCursor } from "../../../../lib/api-validation";
+import { buildApiSuccessResponse } from "../../../../lib/api-response";
+import {
+  buildValidationErrorResponse,
+  buildValidationIssues,
+  safeDecodeUpdatedAtCursor
+} from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../lib/cursor-pagination";
@@ -89,17 +94,10 @@ const getHandler = withAuthenticatedRoute(["search:read"], async ({ request }) =
   });
 
   if (!parsedQueryResult.success) {
-    return Response.json(
-      {
-        ok: false,
-        error: "invalid_search_query",
-        issues: parsedQueryResult.error.issues.map((issue) => ({
-          path: issue.path.join("."),
-          message: issue.message
-        }))
-      },
-      { status: 400 }
-    );
+    return buildValidationErrorResponse({
+      error: "invalid_search_query",
+      issues: buildValidationIssues(parsedQueryResult.error)
+    });
   }
 
   const parsedQuery = parsedQueryResult.data;
@@ -179,8 +177,7 @@ const getHandler = withAuthenticatedRoute(["search:read"], async ({ request }) =
     const lastPageCollection = pageCollections.at(-1);
     const nextCursor = hasMore && lastPageCollection ? encodeUpdatedAtCursor(lastPageCollection) : null;
 
-    return Response.json({
-      ok: true,
+    return buildApiSuccessResponse({
       query: parsedQuery.q,
       entity: parsedQuery.entity,
       items: await serializeEnrichedCollections(database, pageCollections),
@@ -247,8 +244,7 @@ const getHandler = withAuthenticatedRoute(["search:read"], async ({ request }) =
       }
     }
 
-    return Response.json({
-      ok: true,
+    return buildApiSuccessResponse({
       query: parsedQuery.q,
       entity: parsedQuery.entity,
       items: serializedItems,
@@ -266,8 +262,7 @@ const getHandler = withAuthenticatedRoute(["search:read"], async ({ request }) =
   const lastPageToken = pageTokens.at(-1);
   const nextCursor = hasMore && lastPageToken ? encodeUpdatedAtCursor(lastPageToken) : null;
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     query: parsedQuery.q,
     entity: parsedQuery.entity,
     items: await serializeEnrichedTokens(database, pageTokens),

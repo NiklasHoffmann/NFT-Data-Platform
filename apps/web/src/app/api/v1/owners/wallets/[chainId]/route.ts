@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { evmAddressSchema, supportedChainIds } from "@nft-platform/domain";
+import { buildApiErrorResponse, buildApiSuccessResponse } from "../../../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../../lib/api-auth";
 import { getWebMongoDatabase } from "../../../../../../lib/mongodb";
@@ -35,28 +36,24 @@ const getHandler = withAuthenticatedRoute<MultiChainWalletOwnersRouteContext>(["
   const parsedOwnerAddress = evmAddressSchema.safeParse(params.chainId);
 
   if (!parsedOwnerAddress.success) {
-    return Response.json(
-      {
-        ok: false,
-        error: "invalid_owner_address",
-        message: "The ownerAddress path parameter must be a valid EVM address."
-      },
-      { status: 400 }
-    );
+    return buildApiErrorResponse({
+      error: "invalid_owner_address",
+      message: "The ownerAddress path parameter must be a valid EVM address.",
+      status: 400
+    });
   }
 
   const parsedChainIds = parseRequestedChainIds(request.nextUrl.searchParams);
 
   if (!parsedChainIds.ok) {
-    return Response.json(
-      {
-        ok: false,
-        error: parsedChainIds.error,
-        message: parsedChainIds.message,
+    return buildApiErrorResponse({
+      error: parsedChainIds.error,
+      message: parsedChainIds.message,
+      status: 400,
+      details: {
         supportedChainIds
-      },
-      { status: 400 }
-    );
+      }
+    });
   }
 
   let cursor;
@@ -86,8 +83,7 @@ const getHandler = withAuthenticatedRoute<MultiChainWalletOwnersRouteContext>(["
     ...(cursor ? { cursor } : {})
   });
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     chainIds: parsedChainIds.value,
     ...inventory
   });

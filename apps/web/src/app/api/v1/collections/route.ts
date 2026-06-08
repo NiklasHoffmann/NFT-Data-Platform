@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ObjectId } from "mongodb";
 import { listCollections } from "@nft-platform/db";
+import { buildApiSuccessResponse } from "../../../../lib/api-response";
 import { safeDecodeUpdatedAtCursor } from "../../../../lib/api-validation";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
@@ -54,8 +55,7 @@ const getHandler = withAuthenticatedRoute(["collections:read"], async ({ request
   const lastPageCollection = pageCollections.at(-1);
   const nextCursor = hasMore && lastPageCollection ? encodeUpdatedAtCursor(lastPageCollection) : null;
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     items: await serializeEnrichedCollections(database, pageCollections),
     pageInfo: {
       limit: parsedQuery.limit,

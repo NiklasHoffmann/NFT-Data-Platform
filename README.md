@@ -120,6 +120,9 @@ The project uses `.env.example` as the local baseline and validates web runtime 
 - `MONGODB_URI`
 - `MONGODB_DATABASE`
 - `REDIS_URL`
+- `CORS_ALLOWED_ORIGINS`
+- `API_MAX_REQUEST_BYTES`
+- `PUBLIC_READ_RATE_LIMIT_PER_MINUTE`
 - `S3_ENDPOINT`
 - `S3_REGION`
 - `S3_ACCESS_KEY`
@@ -166,7 +169,10 @@ The example file also includes websocket variants, but the current worker bootst
 
 ### Utility routes
 
-- `GET /api/health` — minimal readiness signal
+- `GET /api/health` — aggregated readiness signal for web + dependencies
+- `GET /api/health/db` — MongoDB dependency status
+- `GET /api/health/redis` — Redis dependency status
+- `GET /api/health/storage` — S3/MinIO dependency status
 - `GET /api/media?url=...` — storage-constrained media proxy for previews
 
 ## Representative APIs

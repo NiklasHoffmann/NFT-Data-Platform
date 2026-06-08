@@ -39,6 +39,9 @@ const webRuntimeConfigSchema = z.object({
   MONGODB_URI: optionalNonEmptyStringWithDefault("mongodb://localhost:27017"),
   MONGODB_DATABASE: optionalNonEmptyStringWithDefault("nft_data_platform"),
   REDIS_URL: optionalNonEmptyStringWithDefault("redis://localhost:6379"),
+  CORS_ALLOWED_ORIGINS: z.string().default(""),
+  API_MAX_REQUEST_BYTES: optionalPositiveIntWithDefault(1_048_576),
+  PUBLIC_READ_RATE_LIMIT_PER_MINUTE: optionalPositiveIntWithDefault(180),
   API_CLIENT_SECRET_ENCRYPTION_KEY: z.string().default(""),
   API_BOOTSTRAP_CLIENT_ID: z.string().default(""),
   API_BOOTSTRAP_KEY: z.string().default(""),
@@ -91,6 +94,9 @@ export type WebRuntimeConfig = {
   mongodbUri: string;
   mongodbDatabase: string;
   redisUrl: string;
+  corsAllowedOrigins: string[];
+  apiMaxRequestBytes: number;
+  publicReadRateLimitPerMinute: number;
   apiClientSecretEncryptionKey: string;
   bootstrapClientId: string;
   bootstrapApiKey: string;
@@ -116,6 +122,9 @@ export function getWebRuntimeConfig(): WebRuntimeConfig {
     mongodbUri: parsed.MONGODB_URI,
     mongodbDatabase: parsed.MONGODB_DATABASE,
     redisUrl: parsed.REDIS_URL,
+    corsAllowedOrigins: parseCsvList(parsed.CORS_ALLOWED_ORIGINS),
+    apiMaxRequestBytes: parsed.API_MAX_REQUEST_BYTES,
+    publicReadRateLimitPerMinute: parsed.PUBLIC_READ_RATE_LIMIT_PER_MINUTE,
     apiClientSecretEncryptionKey: parsed.API_CLIENT_SECRET_ENCRYPTION_KEY,
     bootstrapClientId: parsed.API_BOOTSTRAP_CLIENT_ID,
     bootstrapApiKey: parsed.API_BOOTSTRAP_KEY,

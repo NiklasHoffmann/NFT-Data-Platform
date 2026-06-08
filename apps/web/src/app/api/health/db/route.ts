@@ -1,23 +1,19 @@
 import type { NextRequest } from "next/server";
-import { buildApiErrorResponse } from "../../../lib/api-response";
-import { getWebRuntimeConfig } from "../../../lib/env";
-import {
-  probeMongoHealth,
-  probeRedisHealth,
-  probeStorageHealth
-} from "../../../lib/health-checks";
+import { buildApiErrorResponse } from "../../../../lib/api-response";
+import { getWebRuntimeConfig } from "../../../../lib/env";
+import { probeMongoHealth } from "../../../../lib/health-checks";
 import {
   attachPublicRateLimitHeaders,
   consumePublicRateLimit
-} from "../../../lib/public-rate-limit";
+} from "../../../../lib/public-rate-limit";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
+export async function GET(request: NextRequest): Promise<Response> {
   const config = getWebRuntimeConfig();
   const rateLimit = await consumePublicRateLimit({
     request,
-    namespace: "health",
+    namespace: "health:db",
     limitPerMinute: config.publicReadRateLimitPerMinute
   });
 
@@ -32,22 +28,17 @@ export async function GET(request: NextRequest) {
     return rateLimitedResponse;
   }
 
-  const checks = await Promise.all([
-    probeMongoHealth(),
-    probeRedisHealth(),
-    probeStorageHealth()
-  ]);
-  const allHealthy = checks.every((check) => check.status === "ok");
+  const check = await probeMongoHealth();
+  const isHealthy = check.status === "ok";
 
   const response = Response.json(
     {
-      ok: allHealthy,
+      ok: isHealthy,
       service: "web",
-      status: allHealthy ? "ok" : "degraded",
-      checks
+      ...check
     },
     {
-      status: allHealthy ? 200 : 503
+      status: isHealthy ? 200 : 503
     }
   );
 

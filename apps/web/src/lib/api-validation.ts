@@ -1,5 +1,6 @@
 import type { ZodError } from "zod";
 import { decodeUpdatedAtCursor, type UpdatedAtCursor } from "./cursor-pagination";
+import { buildApiErrorResponse } from "./api-response";
 
 export function buildValidationIssues(error: ZodError): Array<{ path: string; message: string }> {
   return error.issues.map((issue) => ({
@@ -14,15 +15,20 @@ export function buildValidationErrorResponse(params: {
   status?: number;
   message?: string;
 }): Response {
-  return Response.json(
-    {
-      ok: false,
-      error: params.error,
-      ...(params.message ? { message: params.message } : {}),
-      issues: params.issues
-    },
-    { status: params.status ?? 400 }
-  );
+  const responseParams: Parameters<typeof buildApiErrorResponse>[0] = {
+    error: params.error,
+    issues: params.issues
+  };
+
+  if (params.message) {
+    responseParams.message = params.message;
+  }
+
+  if (typeof params.status === "number") {
+    responseParams.status = params.status;
+  }
+
+  return buildApiErrorResponse(responseParams);
 }
 
 export function safeParseJsonRequestBody(bodyText: string):
@@ -37,14 +43,11 @@ export function safeParseJsonRequestBody(bodyText: string):
   } catch {
     return {
       ok: false,
-      response: Response.json(
-        {
-          ok: false,
-          error: "invalid_json_body",
-          message: "The request body must contain valid JSON."
-        },
-        { status: 400 }
-      )
+      response: buildApiErrorResponse({
+        error: "invalid_json_body",
+        message: "The request body must contain valid JSON.",
+        status: 400
+      })
     };
   }
 }
@@ -57,14 +60,11 @@ export function safeDecodeUpdatedAtCursor(cursor: string):
   } catch {
     return {
       ok: false,
-      response: Response.json(
-        {
-          ok: false,
-          error: "invalid_cursor",
-          message: "The supplied cursor is invalid."
-        },
-        { status: 400 }
-      )
+      response: buildApiErrorResponse({
+        error: "invalid_cursor",
+        message: "The supplied cursor is invalid.",
+        status: 400
+      })
     };
   }
 }

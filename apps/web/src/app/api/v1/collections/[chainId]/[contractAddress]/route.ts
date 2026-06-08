@@ -3,6 +3,7 @@ import {
   findCollectionByIdentity,
   serializeCollectionDocument
 } from "@nft-platform/db";
+import { buildApiErrorResponse, buildApiSuccessResponse } from "../../../../../../lib/api-response";
 import { getWebMongoDatabase } from "../../../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../../../lib/api-auth";
 import { serializeEnrichedCollection } from "../../../../../../lib/collection-response";
@@ -19,14 +20,11 @@ const getHandler = withAuthenticatedRoute<CollectionRouteContext>(
     const chainId = Number(params.chainId);
 
     if (!Number.isInteger(chainId) || chainId <= 0) {
-      return Response.json(
-        {
-          ok: false,
-          error: "invalid_chain_id",
-          message: "The chainId path parameter must be a positive integer."
-        },
-        { status: 400 }
-      );
+      return buildApiErrorResponse({
+        error: "invalid_chain_id",
+        message: "The chainId path parameter must be a positive integer.",
+        status: 400
+      });
     }
 
     const database = getWebMongoDatabase();
@@ -37,23 +35,21 @@ const getHandler = withAuthenticatedRoute<CollectionRouteContext>(
     });
 
     if (!collection) {
-      return Response.json(
-        {
-          ok: false,
-          error: "collection_not_found"
-          ,lookup: buildCollectionLookup(false),
+      return buildApiErrorResponse({
+        error: "collection_not_found",
+        status: 404,
+        details: {
+          lookup: buildCollectionLookup(false),
           requestedIdentity: {
             chainId,
             contractAddress: params.contractAddress
           },
           item: null
-        },
-        { status: 404 }
-      );
+        }
+      });
     }
 
-    return Response.json({
-      ok: true,
+    return buildApiSuccessResponse({
       lookup: buildCollectionLookup(true),
       requestedIdentity: {
         chainId,

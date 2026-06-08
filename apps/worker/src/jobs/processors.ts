@@ -113,7 +113,7 @@ export async function processQueueJob(params: {
       payload: params.job.data as Record<string, unknown>,
       status: shouldRetry ? "queued" : "failed",
       attempts: params.job.attemptsMade + 1,
-      lastError: error instanceof Error ? error.message : String(error),
+      lastError: formatQueueProcessingError(error),
       updatedAt: new Date()
     });
 
@@ -156,6 +156,77 @@ class RetryableQueueError extends Error {
     super(message);
     this.name = "RetryableQueueError";
   }
+}
+
+function formatQueueProcessingError(error: unknown): string {
+  const baseMessage = toNonEmptyErrorMessage(error, "Queue job failed.");
+  const mongoValidationDetails = extractMongoValidationDetails(error);
+
+  if (!mongoValidationDetails) {
+    return baseMessage;
+  }
+
+  return `${baseMessage} | ${mongoValidationDetails}`;
+}
+
+function extractMongoValidationDetails(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    codeName?: unknown;
+    errInfo?: unknown;
+  };
+
+  const isDocumentValidationFailure =
+    candidate.code === 121 || candidate.codeName === "DocumentValidationFailure";
+
+  if (!isDocumentValidationFailure) {
+    return null;
+  }
+
+  const serializedDetails = serializeMongoErrInfo(candidate.errInfo);
+
+  if (!serializedDetails) {
+    return "mongo_validation_error";
+  }
+
+  return `mongo_validation_error details=${serializedDetails}`;
+}
+
+function serializeMongoErrInfo(errInfo: unknown): string | null {
+  if (!errInfo) {
+    return null;
+  }
+
+  try {
+    const serialized = JSON.stringify(errInfo);
+
+    if (!serialized || serialized === "{}") {
+      return null;
+    }
+
+    return serialized.length <= 1200
+      ? serialized
+      : `${serialized.slice(0, 1200)}...`;
+  } catch {
+    return null;
+  }
+}
+
+function toNonEmptyErrorMessage(value: unknown, fallback: string): string {
+  if (value instanceof Error) {
+    const trimmedMessage = value.message.trim();
+
+    if (trimmedMessage) {
+      return trimmedMessage;
+    }
+  }
+
+  const normalized = String(value ?? "").trim();
+  return normalized || fallback;
 }
 
 async function handleRefreshCollection(
@@ -2577,7 +2648,7 @@ function describeMediaProcessingFailure(params: {
   error: unknown;
   mediaMaxVideoBytes: number;
 }): string {
-  const message = params.error instanceof Error ? params.error.message : String(params.error ?? "Unknown media error.");
+  const message = toNonEmptyErrorMessage(params.error, "Unknown media error.");
 
   if (params.kind === "animation" && message.includes("safety limit")) {
     return `External fallback retained because the video exceeds the configured ${formatByteLimit(params.mediaMaxVideoBytes)} ingest limit.`;
@@ -2656,7 +2727,7 @@ function classifyRemoteMediaFetchFailure(params: {
   candidateUrl: string;
   error: unknown;
 }): { message: string; retryable: boolean } {
-  const originalMessage = params.error instanceof Error ? params.error.message : String(params.error ?? "Unknown media fetch error.");
+  const originalMessage = toNonEmptyErrorMessage(params.error, "Unknown media fetch error.");
   const retryable = isRetryableMediaFailure({
     error: params.error,
     sourceUrl: params.sourceUrl

@@ -14,7 +14,9 @@ import {
   verifyRequestSignature,
   type AuthenticatedApiClient
 } from "@nft-platform/security";
+import { buildApiErrorResponse } from "./api-response";
 import { getWebRuntimeConfig } from "./env";
+import { logger } from "./logger";
 import { getWebMongoDatabase } from "./mongodb";
 import { getRedisClient } from "./redis";
 
@@ -57,13 +59,26 @@ export function withAuthenticatedRoute<TContext>(
     const requestedScope = requiredScopes[0] ?? null;
 
     if (!authResult.ok) {
+      const responseTimeMs = Date.now() - startedAt;
+
       await writeAuditLog({
         clientId: authResult.clientId,
         scope: requestedScope,
         method: request.method,
         path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
         statusCode: authResult.response.status,
-        responseTimeMs: Date.now() - startedAt,
+        responseTimeMs,
+        ip: authResult.ip,
+        rateLimitDecision: authResult.rateLimitDecision
+      });
+
+      logger.info("authenticated_request_denied", {
+        clientId: authResult.clientId,
+        scope: requestedScope,
+        method: request.method,
+        path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
+        statusCode: authResult.response.status,
+        responseTimeMs,
         ip: authResult.ip,
         rateLimitDecision: authResult.rateLimitDecision
       });
@@ -77,6 +92,7 @@ export function withAuthenticatedRoute<TContext>(
         context,
         auth: authResult.value
       });
+      const responseTimeMs = Date.now() - startedAt;
 
       attachRateLimitHeaders(response, authResult.value.rateLimit);
 
@@ -86,25 +102,62 @@ export function withAuthenticatedRoute<TContext>(
         method: request.method,
         path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
         statusCode: response.status,
-        responseTimeMs: Date.now() - startedAt,
+        responseTimeMs,
         ip: authResult.value.ip,
         rateLimitDecision: "allow"
       });
 
+      logger.info("authenticated_request_completed", {
+        clientId: authResult.value.client.clientId,
+        scope: requestedScope,
+        method: request.method,
+        path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
+        statusCode: response.status,
+        responseTimeMs,
+        ip: authResult.value.ip
+      });
+
       return response;
     } catch (error) {
+      const responseTimeMs = Date.now() - startedAt;
+
+      logger.error("authenticated_route_handler_failed", {
+        method: request.method,
+        path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
+        clientId: authResult.value.client.clientId,
+        error
+      });
+
       await writeAuditLog({
         clientId: authResult.value.client.clientId,
         scope: requestedScope,
         method: request.method,
         path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
         statusCode: 500,
-        responseTimeMs: Date.now() - startedAt,
+        responseTimeMs,
         ip: authResult.value.ip,
         rateLimitDecision: "allow"
       });
 
-      throw error;
+      logger.error("authenticated_request_failed", {
+        clientId: authResult.value.client.clientId,
+        scope: requestedScope,
+        method: request.method,
+        path: `${request.nextUrl.pathname}${request.nextUrl.search}`,
+        statusCode: 500,
+        responseTimeMs,
+        ip: authResult.value.ip,
+        error
+      });
+
+      const failureResponse = buildApiErrorResponse({
+        error: "internal_server_error",
+        message: "The server encountered an unexpected error.",
+        status: 500
+      });
+
+      attachRateLimitHeaders(failureResponse, authResult.value.rateLimit);
+      return failureResponse;
     }
   };
 }
@@ -228,7 +281,10 @@ export async function authenticateApiRequest(
       });
     }
   } catch (error) {
-    console.error("[auth] replay guard backend unavailable", error);
+    logger.error("auth_replay_guard_unavailable", {
+      clientId: resolvedClient.clientId,
+      error
+    });
 
     return buildFailureResponse({
       clientId: resolvedClient.clientId,
@@ -249,7 +305,10 @@ export async function authenticateApiRequest(
       windowSeconds: 60
     });
   } catch (error) {
-    console.error("[auth] rate limit backend unavailable", error);
+    logger.error("auth_rate_limit_unavailable", {
+      clientId: resolvedClient.clientId,
+      error
+    });
 
     return buildFailureResponse({
       clientId: resolvedClient.clientId,
@@ -278,7 +337,10 @@ export async function authenticateApiRequest(
       clientId: resolvedClient.clientId,
       usedAt: new Date()
     }).catch((error) => {
-      console.error("[auth] failed to mark api client usage", error);
+      logger.warn("auth_mark_api_client_used_failed", {
+        clientId: resolvedClient.clientId,
+        error
+      });
     });
   }
 
@@ -336,7 +398,10 @@ async function resolveApiClient(params: {
       };
     }
   } catch (error) {
-    console.error("[auth] failed to resolve api client from database", error);
+    logger.error("auth_resolve_client_failed", {
+      requestedClientId: params.headerClientId,
+      error
+    });
   }
 
   if (!config.bootstrapClientId || !config.bootstrapApiKey || !config.bootstrapApiSecret) {
@@ -436,7 +501,14 @@ async function writeAuditLog(params: {
       rateLimitDecision: params.rateLimitDecision
     });
   } catch (error) {
-    console.error("[audit] failed to persist audit log", error);
+    logger.error("audit_log_persist_failed", {
+      clientId: params.clientId,
+      scope: params.scope,
+      method: params.method,
+      path: params.path,
+      statusCode: params.statusCode,
+      error
+    });
   }
 }
 
@@ -461,15 +533,10 @@ function buildFailureResponse(params: {
     clientId: params.clientId,
     ip: params.ip,
     rateLimitDecision: params.rateLimitDecision,
-    response: Response.json(
-      {
-        ok: false,
-        error: params.code,
-        message: params.message
-      },
-      {
-        status: params.status
-      }
-    )
+    response: buildApiErrorResponse({
+      error: params.code,
+      message: params.message,
+      status: params.status
+    })
   };
 }

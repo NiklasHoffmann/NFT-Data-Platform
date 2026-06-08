@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
-import { createJob, findTokensByIdentities, getMongoCollections } from "@nft-platform/db";
+import { findTokensByIdentities, getMongoCollections } from "@nft-platform/db";
 import { tokenIdentitySchema } from "@nft-platform/domain";
 import { z } from "zod";
+import { buildApiSuccessResponse } from "../../../../../lib/api-response";
 import {
   buildValidationErrorResponse,
   buildValidationIssues,
@@ -12,6 +13,10 @@ import { guardContractAddress } from "../../../../../lib/contract-address-guard"
 import { serializeEnrichedCollections } from "../../../../../lib/collection-response";
 import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { enqueueRefreshTokenJob } from "../../../../../lib/queue";
+import {
+  mapQueueBackedDiscoveryStatus,
+  persistQueueBackedJobRecord
+} from "../../../../../services/jobs/queue-job-service";
 import { serializeEnrichedTokens } from "../../../../../lib/token-response";
 
 export const dynamic = "force-dynamic";
@@ -118,37 +123,34 @@ const postHandler = withAuthenticatedRoute(["tokens:read", "refresh:token"], asy
       forceMetadata: true,
       forceOwnership: false
     });
-    const jobId = await createJob(database, {
-      queueJobId: queuedJob.jobId,
+    const queuedPayload = {
+      chainId: item.chainId,
+      contractAddress: item.contractAddress,
+      tokenId: item.tokenId,
+      forceMetadata: true,
+      forceOwnership: false
+    } satisfies Record<string, unknown>;
+    const persistedJob = await persistQueueBackedJobRecord({
+      database,
+      queuedJob,
       type: "refresh-token",
-      payload: {
-        chainId: item.chainId,
-        contractAddress: item.contractAddress,
-        tokenId: item.tokenId,
-        forceMetadata: true,
-        forceOwnership: false
-      },
-      status: queuedJob.status,
-      attempts: queuedJob.attempts,
-      lastError: queuedJob.lastError,
-      createdAt: now,
-      updatedAt: now
+      payload: queuedPayload,
+      now
     });
 
     return {
       chainId: item.chainId,
       contractAddress: item.contractAddress,
       tokenId: item.tokenId,
-      discoveryStatus: queuedJob.status === "failed" ? "failed" as const : "queued" as const,
+      discoveryStatus: mapQueueBackedDiscoveryStatus(queuedJob.status),
       queuedJobId: queuedJob.jobId,
-      jobId: jobId.toHexString(),
+      jobId: persistedJob.jobId,
       token: null,
       collection: null
     };
   }));
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     summary: {
       total: responseItems.length,
       ready: responseItems.filter((item) => item.discoveryStatus === "ready").length,

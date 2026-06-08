@@ -8,6 +8,7 @@ import {
 } from "@nft-platform/db";
 import { ObjectId } from "mongodb";
 import { z } from "zod";
+import { buildApiErrorResponse, buildApiSuccessResponse } from "../../../../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeDecodeUpdatedAtCursor } from "../../../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../../../lib/api-auth";
 import { decodeUpdatedAtCursor, encodeUpdatedAtCursor } from "../../../../../../../lib/cursor-pagination";
@@ -42,14 +43,11 @@ const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read
   const chainId = Number(params.chainId);
 
   if (!Number.isInteger(chainId) || chainId <= 0) {
-    return Response.json(
-      {
-        ok: false,
-        error: "invalid_chain_id",
-        message: "The chainId path parameter must be a positive integer."
-      },
-      { status: 400 }
-    );
+    return buildApiErrorResponse({
+      error: "invalid_chain_id",
+      message: "The chainId path parameter must be a positive integer.",
+      status: 400
+    });
   }
 
   const database = getWebMongoDatabase();
@@ -61,13 +59,10 @@ const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read
   });
 
   if (!token) {
-    return Response.json(
-      {
-        ok: false,
-        error: "token_not_found"
-      },
-      { status: 404 }
-    );
+    return buildApiErrorResponse({
+      error: "token_not_found",
+      status: 404
+    });
   }
 
   if (token.standard === "erc721") {
@@ -78,8 +73,7 @@ const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read
       tokenId: params.tokenId
     });
 
-    return Response.json({
-      ok: true,
+    return buildApiSuccessResponse({
       standard: token.standard,
       items: ownership ? [serializeErc721OwnershipDocument(ownership)] : [],
       pageInfo: {
@@ -91,14 +85,11 @@ const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read
   }
 
   if (token.standard !== "erc1155") {
-    return Response.json(
-      {
-        ok: false,
-        error: "unsupported_standard",
-        message: "Holder listing is currently implemented for ERC-721 and ERC-1155 tokens only."
-      },
-      { status: 400 }
-    );
+    return buildApiErrorResponse({
+      error: "unsupported_standard",
+      message: "Holder listing is currently implemented for ERC-721 and ERC-1155 tokens only.",
+      status: 400
+    });
   }
 
   const listParams: {
@@ -135,8 +126,7 @@ const getHandler = withAuthenticatedRoute<TokenOwnersRouteContext>(["owners:read
   const lastPageBalance = pageBalances.at(-1);
   const nextCursor = hasMore && lastPageBalance ? encodeUpdatedAtCursor(lastPageBalance) : null;
 
-  return Response.json({
-    ok: true,
+  return buildApiSuccessResponse({
     standard: token.standard,
     items: pageBalances.map(serializeErc1155BalanceDocument),
     pageInfo: {
