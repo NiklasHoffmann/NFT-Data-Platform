@@ -144,9 +144,9 @@ export function createChainPublicClient(params: {
   return createPublicClient({
     chain,
     transport: http(params.rpcUrl, {
-      timeout: 10_000,
-      retryCount: 2,
-      retryDelay: 250
+      timeout: 15_000,
+      retryCount: 3,
+      retryDelay: 2_000
     })
   });
 }
