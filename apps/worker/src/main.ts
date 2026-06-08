@@ -68,8 +68,7 @@ async function bootstrap(): Promise<void> {
             context: {
               database,
               redisConnection: connection,
-              rpcMainnetUrl: config.rpcMainnetUrl,
-              rpcSepoliaUrl: config.rpcSepoliaUrl,
+              rpcUrls: config.rpcUrls,
               storage: config.storage,
               mediaMaxVideoBytes: config.mediaMaxVideoBytes
             }
@@ -91,8 +90,7 @@ async function bootstrap(): Promise<void> {
   const stopChainIndexingLoop = startChainIndexingLoop({
     database,
     redisConnection: connection,
-    rpcMainnetUrl: config.rpcMainnetUrl,
-    rpcSepoliaUrl: config.rpcSepoliaUrl,
+    rpcUrls: config.rpcUrls,
     config: {
       chainIndexingEnabled: config.chainIndexingEnabled,
       chainIndexingPollIntervalMs: config.chainIndexingPollIntervalMs,

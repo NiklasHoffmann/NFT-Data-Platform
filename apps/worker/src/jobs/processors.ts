@@ -63,8 +63,7 @@ import {
 type JobProcessingContext = {
   database: Db;
   redisConnection: IORedis;
-  rpcMainnetUrl: string;
-  rpcSepoliaUrl: string;
+  rpcUrls: Record<number, string>;
   storage: StorageConfig;
   mediaMaxVideoBytes: number;
 };
@@ -1511,8 +1510,7 @@ function getPublicClientForChain(chainId: number, context: JobProcessingContext)
     chainId,
     rpcUrl: getRpcUrlForChain({
       chainId,
-      rpcMainnetUrl: context.rpcMainnetUrl,
-      rpcSepoliaUrl: context.rpcSepoliaUrl
+      rpcUrls: context.rpcUrls
     })
   });
 }

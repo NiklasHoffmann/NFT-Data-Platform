@@ -18,8 +18,7 @@ import type { ChainIndexingRuntimeConfig } from "./env";
 type ChainIndexingLoopParams = {
   database: Db;
   redisConnection: IORedis;
-  rpcMainnetUrl: string;
-  rpcSepoliaUrl: string;
+  rpcUrls: Record<number, string>;
   config: ChainIndexingRuntimeConfig;
 };
 
@@ -76,8 +75,7 @@ async function pollCollections(params: ChainIndexingLoopParams, queue: Queue): P
       collection,
       database: params.database,
       queue,
-      rpcMainnetUrl: params.rpcMainnetUrl,
-      rpcSepoliaUrl: params.rpcSepoliaUrl,
+      rpcUrls: params.rpcUrls,
       maxBlockRange: params.config.chainIndexingMaxBlockRange
     });
   }
@@ -87,15 +85,13 @@ async function maybeQueueReindexForCollection(params: {
   collection: CollectionDocument;
   database: Db;
   queue: Queue;
-  rpcMainnetUrl: string;
-  rpcSepoliaUrl: string;
+  rpcUrls: Record<number, string>;
   maxBlockRange: number;
 }): Promise<void> {
   const now = new Date();
   const latestBlock = await readLatestBlock({
     collection: params.collection,
-    rpcMainnetUrl: params.rpcMainnetUrl,
-    rpcSepoliaUrl: params.rpcSepoliaUrl
+    rpcUrls: params.rpcUrls
   });
 
   if (latestBlock === null) {
@@ -164,10 +160,15 @@ async function maybeQueueReindexForCollection(params: {
 
 async function readLatestBlock(params: {
   collection: CollectionDocument;
-  rpcMainnetUrl: string;
-  rpcSepoliaUrl: string;
+  rpcUrls: Record<number, string>;
 }): Promise<number | null> {
-  const rpcUrl = params.collection.chainId === 1 ? params.rpcMainnetUrl : params.rpcSepoliaUrl;
+  const rpcUrl = params.rpcUrls[params.collection.chainId];
+
+  if (!rpcUrl) {
+    console.warn(`[chain-indexing] no RPC URL configured for chainId ${params.collection.chainId}, skipping`);
+    return null;
+  }
+
   const publicClient = createChainPublicClient({
     chainId: params.collection.chainId,
     rpcUrl

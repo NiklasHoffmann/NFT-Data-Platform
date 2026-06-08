@@ -1,4 +1,5 @@
-import { normalizeContractAddress, type Scope } from "@nft-platform/domain";
+import process from "node:process";
+import { normalizeContractAddress, supportedChains, type Scope } from "@nft-platform/domain";
 import { storageConfigSchema, type StorageConfig } from "@nft-platform/storage";
 import { parseScopeList } from "@nft-platform/security";
 import { z } from "zod";
@@ -8,8 +9,6 @@ const workerRuntimeConfigSchema = z.object({
   REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
   MONGODB_URI: z.string().min(1).default("mongodb://localhost:27017"),
   MONGODB_DATABASE: z.string().min(1).default("nft_data_platform"),
-  RPC_MAINNET_URL: z.string().url(),
-  RPC_SEPOLIA_URL: z.string().url(),
   S3_ENDPOINT: z.string().url(),
   S3_REGION: z.string().min(1),
   S3_ACCESS_KEY: z.string().min(1),
@@ -66,8 +65,7 @@ export type WorkerRuntimeConfig = {
   redisUrl: string;
   mongodbUri: string;
   mongodbDatabase: string;
-  rpcMainnetUrl: string;
-  rpcSepoliaUrl: string;
+  rpcUrls: Record<number, string>;
   storage: StorageConfig;
   mediaMaxVideoBytes: number;
   chainIndexingEnabled: boolean;
@@ -95,8 +93,7 @@ export function getWorkerRuntimeConfig(): WorkerRuntimeConfig {
     redisUrl: parsed.REDIS_URL,
     mongodbUri: parsed.MONGODB_URI,
     mongodbDatabase: parsed.MONGODB_DATABASE,
-    rpcMainnetUrl: parsed.RPC_MAINNET_URL,
-    rpcSepoliaUrl: parsed.RPC_SEPOLIA_URL,
+    rpcUrls: buildRpcUrlsFromEnv(),
     storage: storageConfigSchema.parse({
       endpoint: parsed.S3_ENDPOINT,
       region: parsed.S3_REGION,
@@ -119,6 +116,31 @@ export function getWorkerRuntimeConfig(): WorkerRuntimeConfig {
     bootstrapRateLimitPerMinute: parsed.API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE,
     bootstrapAllowedIps: parseCsvList(parsed.API_BOOTSTRAP_ALLOWED_IPS)
   };
+}
+
+// Reads RPC_URL_<chainId> env vars for all supported chains.
+// Also accepts the legacy RPC_MAINNET_URL and RPC_SEPOLIA_URL names for backward compatibility.
+function buildRpcUrlsFromEnv(): Record<number, string> {
+  const rpcUrls: Record<number, string> = {};
+
+  for (const chain of supportedChains) {
+    const url = process.env[`RPC_URL_${chain.id}`];
+
+    if (url?.trim()) {
+      rpcUrls[chain.id] = url.trim();
+    }
+  }
+
+  // Backward-compat aliases
+  if (process.env.RPC_MAINNET_URL?.trim() && !rpcUrls[1]) {
+    rpcUrls[1] = process.env.RPC_MAINNET_URL.trim();
+  }
+
+  if (process.env.RPC_SEPOLIA_URL?.trim() && !rpcUrls[11155111]) {
+    rpcUrls[11155111] = process.env.RPC_SEPOLIA_URL.trim();
+  }
+
+  return rpcUrls;
 }
 
 function parseCsvList(value: string): string[] {

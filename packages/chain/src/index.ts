@@ -12,9 +12,10 @@ import {
   parseAbiItem,
   toHex,
   type Address,
+  type Chain,
   type PublicClient
 } from "viem";
-import { mainnet, sepolia } from "viem/chains";
+import { mainnet, optimism, polygon, base, arbitrum, zora, sepolia, baseSepolia, polygonAmoy } from "viem/chains";
 
 const erc165Abi = parseAbi([
   "function supportsInterface(bytes4 interfaceId) view returns (bool)"
@@ -73,7 +74,14 @@ const zeroWalletAddress = normalizeWalletAddress("0x0000000000000000000000000000
 
 const supportedChainsById = {
   1: mainnet,
-  11155111: sepolia
+  10: optimism,
+  137: polygon,
+  8453: base,
+  42161: arbitrum,
+  7777777: zora,
+  11155111: sepolia,
+  84532: baseSepolia,
+  80002: polygonAmoy
 } as const;
 
 const globalChainRegistry = globalThis as typeof globalThis & {
@@ -127,7 +135,7 @@ export function createChainPublicClient(params: {
   chainId: number;
   rpcUrl: string;
 }): PublicClient {
-  const chain = supportedChainsById[params.chainId as keyof typeof supportedChainsById];
+  const chain = supportedChainsById[params.chainId as keyof typeof supportedChainsById] as Chain;
 
   if (!chain) {
     throw new Error(`Unsupported chainId ${params.chainId}.`);
@@ -808,17 +816,15 @@ export async function readErc1155TransfersForTokenInRange(params: {
 
 export function getRpcUrlForChain(params: {
   chainId: number;
-  rpcMainnetUrl: string;
-  rpcSepoliaUrl: string;
+  rpcUrls: Record<number, string>;
 }): string {
-  switch (params.chainId) {
-    case 1:
-      return params.rpcMainnetUrl;
-    case 11155111:
-      return params.rpcSepoliaUrl;
-    default:
-      throw new Error(`Unsupported chainId ${params.chainId}.`);
+  const url = params.rpcUrls[params.chainId];
+
+  if (!url) {
+    throw new Error(`No RPC URL configured for chainId ${params.chainId}. Set RPC_URL_${params.chainId} in the environment.`);
   }
+
+  return url;
 }
 
 async function safeReadContract<T>(params: {

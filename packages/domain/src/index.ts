@@ -2,7 +2,14 @@ import { z } from "zod";
 
 export const supportedChains = [
   { id: 1, key: "ethereum-mainnet", name: "Ethereum Mainnet" },
-  { id: 11155111, key: "sepolia", name: "Sepolia" }
+  { id: 10, key: "optimism", name: "Optimism" },
+  { id: 137, key: "polygon", name: "Polygon" },
+  { id: 8453, key: "base", name: "Base" },
+  { id: 42161, key: "arbitrum-one", name: "Arbitrum One" },
+  { id: 7777777, key: "zora", name: "Zora" },
+  { id: 11155111, key: "sepolia", name: "Sepolia" },
+  { id: 84532, key: "base-sepolia", name: "Base Sepolia" },
+  { id: 80002, key: "polygon-amoy", name: "Polygon Amoy" }
 ] as const;
 
 export const supportedChainIds = supportedChains.map((chain) => chain.id);
