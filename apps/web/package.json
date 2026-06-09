@@ -19,6 +19,7 @@
     "@nft-platform/queue": "file:../../packages/queue",
     "@nft-platform/runtime": "file:../../packages/runtime",
     "@nft-platform/security": "file:../../packages/security",
+    "@nft-platform/storage": "file:../../packages/storage",
     "bullmq": "^5.46.1",
     "ioredis": "^5.4.2",
     "next": "^15.2.4",

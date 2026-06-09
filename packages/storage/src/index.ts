@@ -23,6 +23,11 @@ export type StorageConfig = z.infer<typeof storageConfigSchema>;
 
 export function createStorageClient(config: StorageConfig): S3Client {
   const [primaryClient] = createStorageClientCandidates(config);
+
+  if (!primaryClient) {
+    throw new Error("No storage endpoint candidates configured.");
+  }
+
   return primaryClient;
 }
 
