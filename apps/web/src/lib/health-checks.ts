@@ -158,9 +158,55 @@ function getStorageClient(config: ReturnType<typeof getWebRuntimeConfig>): S3Cli
 }
 
 function toSafeHealthErrorMessage(error: unknown): string {
+  const classified = classifyHealthError(error);
+
+  if (classified) {
+    return classified;
+  }
+
   if (process.env.NODE_ENV === "development" && error instanceof Error && error.message.trim()) {
     return error.message;
   }
 
   return "dependency_unavailable";
+}
+
+function classifyHealthError(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  const message = error.message.toLowerCase();
+  const nodeErrorCode = readNodeErrorCode(error);
+
+  if (message.includes("_health_timeout") || nodeErrorCode === "ETIMEDOUT") {
+    return "dependency_timeout";
+  }
+
+  if (nodeErrorCode && ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET"].includes(nodeErrorCode)) {
+    return "endpoint_unreachable";
+  }
+
+  const awsStatusCode = readAwsHttpStatusCode(error);
+
+  if (awsStatusCode === 401 || awsStatusCode === 403) {
+    return "storage_access_denied";
+  }
+
+  if (awsStatusCode === 404 || message.includes("nosuchbucket") || message.includes("not found")) {
+    return "storage_bucket_not_found";
+  }
+
+  return null;
+}
+
+function readNodeErrorCode(error: Error): string | null {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function readAwsHttpStatusCode(error: Error): number | null {
+  const metadata = (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata;
+  const code = metadata?.httpStatusCode;
+  return typeof code === "number" ? code : null;
 }
