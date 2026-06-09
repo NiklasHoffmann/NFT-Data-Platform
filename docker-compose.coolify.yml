@@ -4,26 +4,16 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
-    depends_on:
-      mongo:
-        condition: service_healthy
-      mongo-app-init:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3000
       APP_BASE_URL: ${APP_BASE_URL:?}
-      MONGODB_URI: mongodb://${MONGODB_APP_USERNAME}:${MONGODB_APP_PASSWORD}@mongo:27017/${MONGODB_DATABASE:-nft_data_platform}
+      MONGODB_URI: ${MONGODB_URI:?}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      RPC_MAINNET_URL: ${RPC_MAINNET_URL:-}
-      RPC_SEPOLIA_URL: ${RPC_SEPOLIA_URL:-}
+      REDIS_URL: ${REDIS_URL:?}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      API_MAX_REQUEST_BYTES: ${API_MAX_REQUEST_BYTES:-1048576}
+      PUBLIC_READ_RATE_LIMIT_PER_MINUTE: ${PUBLIC_READ_RATE_LIMIT_PER_MINUTE:-180}
       RPC_URL_1: ${RPC_URL_1:-}
       RPC_URL_10: ${RPC_URL_10:-}
       RPC_URL_137: ${RPC_URL_137:-}
@@ -33,17 +23,17 @@ services:
       RPC_URL_11155111: ${RPC_URL_11155111:-}
       RPC_URL_84532: ${RPC_URL_84532:-}
       RPC_URL_80002: ${RPC_URL_80002:-}
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:?}
       S3_REGION: ${S3_REGION:-us-east-1}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?}
       S3_BUCKET: ${S3_BUCKET:-nft-media}
-      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://minio:9000/nft-media}
-      API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY}
-      API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID}
-      API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY}
-      API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET}
-      API_BOOTSTRAP_SCOPES: ${API_BOOTSTRAP_SCOPES}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:?}
+      API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY:?}
+      API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID:?}
+      API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY:?}
+      API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET:?}
+      API_BOOTSTRAP_SCOPES: ${API_BOOTSTRAP_SCOPES:?}
       API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: ${API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE:-300}
       API_BOOTSTRAP_ALLOWED_IPS: ${API_BOOTSTRAP_ALLOWED_IPS:-}
       AUTH_MAX_TIMESTAMP_SKEW_SEC: ${AUTH_MAX_TIMESTAMP_SKEW_SEC:-300}
@@ -63,31 +53,17 @@ services:
       - "3000"
     networks:
       - public
-      - backend
 
   worker:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
     restart: unless-stopped
-    depends_on:
-      mongo:
-        condition: service_healthy
-      mongo-app-init:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      MONGODB_URI: mongodb://${MONGODB_APP_USERNAME}:${MONGODB_APP_PASSWORD}@mongo:27017/${MONGODB_DATABASE:-nft_data_platform}
+      REDIS_URL: ${REDIS_URL:?}
+      MONGODB_URI: ${MONGODB_URI:?}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
-      RPC_MAINNET_URL: ${RPC_MAINNET_URL:-}
-      RPC_SEPOLIA_URL: ${RPC_SEPOLIA_URL:-}
       RPC_URL_1: ${RPC_URL_1:-}
       RPC_URL_10: ${RPC_URL_10:-}
       RPC_URL_137: ${RPC_URL_137:-}
@@ -97,124 +73,27 @@ services:
       RPC_URL_11155111: ${RPC_URL_11155111:-}
       RPC_URL_84532: ${RPC_URL_84532:-}
       RPC_URL_80002: ${RPC_URL_80002:-}
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: ${S3_ENDPOINT:?}
       S3_REGION: ${S3_REGION:-us-east-1}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?}
       S3_BUCKET: ${S3_BUCKET:-nft-media}
-      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://minio:9000/nft-media}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:?}
       MEDIA_MAX_VIDEO_BYTES: ${MEDIA_MAX_VIDEO_BYTES:-25000000}
       CHAIN_INDEXING_ENABLED: ${CHAIN_INDEXING_ENABLED:-false}
       CHAIN_INDEXING_POLL_INTERVAL_MS: ${CHAIN_INDEXING_POLL_INTERVAL_MS:-30000}
       CHAIN_INDEXING_BATCH_SIZE: ${CHAIN_INDEXING_BATCH_SIZE:-10}
       CHAIN_INDEXING_MAX_BLOCK_RANGE: ${CHAIN_INDEXING_MAX_BLOCK_RANGE:-2000}
       CHAIN_INDEXING_COLLECTION_ALLOWLIST: ${CHAIN_INDEXING_COLLECTION_ALLOWLIST:-}
-      API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY}
-      API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID}
-      API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY}
-      API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET}
-      API_BOOTSTRAP_SCOPES: ${API_BOOTSTRAP_SCOPES}
+      API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY:?}
+      API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID:?}
+      API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY:?}
+      API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET:?}
+      API_BOOTSTRAP_SCOPES: ${API_BOOTSTRAP_SCOPES:?}
       API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: ${API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE:-300}
       API_BOOTSTRAP_ALLOWED_IPS: ${API_BOOTSTRAP_ALLOWED_IPS:-}
     networks:
       - public
-      - backend
-
-  mongo:
-    image: mongo:8.0
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD}
-      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-nft_data_platform}
-    volumes:
-      - mongo_auth_data:/data/db
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "mongosh",
-          "--username",
-          "${MONGODB_ROOT_USERNAME}",
-          "--password",
-          "${MONGODB_ROOT_PASSWORD}",
-          "--authenticationDatabase",
-          "admin",
-          "--eval",
-          "db.adminCommand('ping')"
-        ]
-      start_period: 60s
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - backend
-
-  mongo-app-init:
-    image: mongo:8.0
-    depends_on:
-      mongo:
-        condition: service_healthy
-    exclude_from_hc: true
-    restart: "no"
-    entrypoint: >-
-      /bin/sh -c '
-      mongosh "mongodb://${MONGODB_ROOT_USERNAME}:${MONGODB_ROOT_PASSWORD}@mongo:27017/admin?authSource=admin" --quiet --eval "const database = db.getSiblingDB(\"${MONGODB_DATABASE:-nft_data_platform}\"); const existingUser = database.getUser(\"${MONGODB_APP_USERNAME}\"); if (!existingUser) { database.createUser({ user: \"${MONGODB_APP_USERNAME}\", pwd: \"${MONGODB_APP_PASSWORD}\", roles: [{ role: \"readWrite\", db: \"${MONGODB_DATABASE:-nft_data_platform}\" }] }); }"'
-    networks:
-      - backend
-
-  redis:
-    image: redis:7.4-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - backend
-
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - backend
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    exclude_from_hc: true
-    restart: "no"
-    entrypoint: >-
-      /bin/sh -c "
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-      mc mb --ignore-existing local/${S3_BUCKET:-nft-media};
-      mc anonymous set none local/${S3_BUCKET:-nft-media};
-      "
-    networks:
-      - backend
-
-volumes:
-  mongo_auth_data:
-  redis_data:
-  minio_data:
 
 networks:
   public:
-  backend:

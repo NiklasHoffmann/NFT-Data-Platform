@@ -9,7 +9,7 @@ NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and servi
 - Protected API surfaces using API keys, HMAC request signing, scope checks, IP allowlists, replay protection, rate limiting, and audit logging.
 - Read models for collections, tokens, ERC-721 ownership, ERC-1155 balances, metadata versions, media assets, jobs, API clients, and audit logs.
 - Operator tooling for inspecting the current indexed state rather than reading live chain data in the request path.
-- Deployment thinking for local Docker Compose and a first-pass Coolify deployment with MongoDB auth, Redis auth, and internal MinIO.
+- Deployment thinking for local Docker Compose and an app-only Coolify deployment where MongoDB, Redis, and S3/MinIO are managed outside the app stack.
 
 ## Tech stack
 
@@ -113,6 +113,7 @@ The worker supports both targeted refresh jobs and optional ongoing chain indexi
 ## Environment variables
 
 The project uses `.env.example` as the local baseline and validates web runtime configuration in `apps/web/src/lib/env.ts`.
+For app-only Coolify deployments with external dependencies, use `.env.coolify.example` as the baseline.
 
 ### Required to run the stack meaningfully
 
@@ -133,10 +134,9 @@ The project uses `.env.example` as the local baseline and validates web runtime 
 
 ### Required for chain-backed ingest
 
-- `RPC_MAINNET_URL`
-- `RPC_SEPOLIA_URL`
+- `RPC_URL_<chainId>` entries for chains you ingest from (for example `RPC_URL_1`, `RPC_URL_11155111`)
 
-The example file also includes websocket variants, but the current worker bootstrap shown in this repository uses the HTTP RPC URLs.
+Legacy `RPC_MAINNET_URL` and `RPC_SEPOLIA_URL` names are still accepted in code as a fallback, but `RPC_URL_<chainId>` is the recommended format.
 
 ### Bootstrap API client
 
@@ -222,22 +222,22 @@ Use `docker-compose.yml` for MongoDB, Redis, and MinIO, then run the web and wor
 
 ### Coolify
 
-`docker-compose.coolify.yml` defines a first-pass self-hosted deployment with:
+`docker-compose.coolify.yml` defines an app-only deployment with:
 
 - public `web`
 - internal `worker`
-- authenticated `mongo`
-- password-protected `redis`
-- internal `minio` and `minio-init`
+
+This setup keeps deploys fast by restarting only application containers. Data services stay online in separate managed services (or separate Coolify resources).
 
 Notes based on the current codebase:
 
 - The web service listens on port `3000`.
 - In Coolify Compose deployments, if the `web` service listens on container port `3000`, enter the domain with `:3000` in Coolify for that service so the proxy routes to the correct internal port while still exposing the app on the normal public URL.
-- `S3_PUBLIC_BASE_URL` can stay on the internal MinIO URL because the web app reads storage objects through credentials and re-serves them through `/api/media`.
-- MongoDB and Redis credentials should be URL-safe because they are interpolated into connection URIs.
+- `MONGODB_URI`, `REDIS_URL`, `S3_ENDPOINT`, and `S3_PUBLIC_BASE_URL` must point to externally reachable services from inside Coolify.
 - `CHAIN_INDEXING_ENABLED=false` is a reasonable initial deployment default.
-- `mongo-app-init` and `minio-init` are one-shot init services; in Coolify they should be excluded from overall healthchecks so an expected exited state does not look like a failed deployment.
+- After first successful deploy, run `npm run db:init` once against production env to ensure validators, indexes, and bootstrap API client records are in place.
+
+For exact UI-level setup fields and ordering, follow `docs/coolify-step-by-step.md`.
 
 ## Code quality and engineering signals
 
@@ -256,6 +256,7 @@ Notes based on the current codebase:
 - `docs/wallet-application-requirements.md` — target architecture and implementation requirements for the separate wallet service
 - `docs/marketplace-application-requirements.md` — target architecture and implementation requirements for the separate marketplace service
 - `docs/admin-governance-application-requirements.md` — target architecture and implementation requirements for the separate admin and governance service
+- `docs/coolify-step-by-step.md` — exact Coolify setup for MongoDB, Redis, MinIO, and app-only deployment
 - `docker-compose.coolify.yml` — production-oriented deployment scaffold
 - `scripts/` — operational and regression tooling
 
