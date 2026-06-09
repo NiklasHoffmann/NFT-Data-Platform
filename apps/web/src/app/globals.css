@@ -1284,7 +1284,18 @@ li {
 
 .collection-token-card__footer {
   display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.collection-token-card__reload-form {
+  margin: 0;
+}
+
+.collection-token-card__reload-button {
+  cursor: pointer;
+  font: inherit;
 }
 
 .collection-token-card .media-stage-frame,

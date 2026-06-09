@@ -1433,6 +1433,15 @@ function renderCollectionTokenCard(params: {
         </div>
       </dl>
       <div className="collection-token-card__footer">
+        <form action="/discover" method="post" className="collection-token-card__reload-form">
+          <input type="hidden" name="chainId" value={String(collectionToken.token.chainId)} />
+          <input type="hidden" name="contractAddress" value={collectionToken.token.contractAddress} />
+          <input type="hidden" name="tokenId" value={collectionToken.token.tokenId} />
+          <input type="hidden" name="forceMediaRefresh" value="true" />
+          <button type="submit" className="detail-link collection-token-card__reload-button">
+            Token neu laden
+          </button>
+        </form>
         <a href={tokenHref} className="detail-link">
           Inspect token details
         </a>

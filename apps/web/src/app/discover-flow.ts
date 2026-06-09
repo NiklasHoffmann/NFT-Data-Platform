@@ -1,10 +1,10 @@
 import { createJob, findCollectionByIdentity, findJobByQueueJobId, findTokenByIdentity } from "@nft-platform/db";
 import { evmAddressSchema, evmTokenIdSchema, normalizeContractAddress } from "@nft-platform/domain";
-import { refreshCollectionJobSchema, refreshTokenJobSchema } from "@nft-platform/queue";
+import { refreshCollectionJobSchema, refreshMediaJobSchema, refreshTokenJobSchema } from "@nft-platform/queue";
 import { z } from "zod";
 import { guardContractAddress } from "../lib/contract-address-guard";
 import { getWebMongoDatabase } from "../lib/mongodb";
-import { enqueueRefreshCollectionJob, enqueueRefreshTokenJob } from "../lib/queue";
+import { enqueueRefreshCollectionJob, enqueueRefreshMediaJob, enqueueRefreshTokenJob } from "../lib/queue";
 
 export type DiscoverStatus = "loaded" | "queued" | "invalid" | "not-found" | "unresolved" | "failed";
 
@@ -19,14 +19,19 @@ type DiscoverRedirectParams = {
 const discoverTokenFormSchema = z.object({
   chainId: z.coerce.number().int().positive(),
   contractAddress: evmAddressSchema,
-  tokenId: z.union([evmTokenIdSchema, z.literal("")]).optional().transform((value) => value ?? "")
+  tokenId: z.union([evmTokenIdSchema, z.literal("")]).optional().transform((value) => value ?? ""),
+  forceMediaRefresh: z
+    .union([z.literal("true"), z.literal("1"), z.literal("on"), z.literal("false"), z.literal("0"), z.literal("")])
+    .optional()
+    .transform((value) => value === "true" || value === "1" || value === "on")
 });
 
 export async function handleDiscoverSubmission(formData: FormData): Promise<DiscoverRedirectParams> {
   const parsed = discoverTokenFormSchema.safeParse({
     chainId: formData.get("chainId") ?? undefined,
     contractAddress: formData.get("contractAddress") ?? undefined,
-    tokenId: formData.get("tokenId") ?? undefined
+    tokenId: formData.get("tokenId") ?? undefined,
+    forceMediaRefresh: formData.get("forceMediaRefresh") ?? undefined
   });
 
   if (!parsed.success) {
@@ -94,6 +99,27 @@ export async function handleDiscoverSubmission(formData: FormData): Promise<Disc
       createdAt: timestamp,
       updatedAt: timestamp
     });
+
+    if (parsed.data.forceMediaRefresh) {
+      const mediaPayload = refreshMediaJobSchema.parse({
+        chainId: parsed.data.chainId,
+        contractAddress: normalizedContractAddress,
+        tokenId: parsed.data.tokenId,
+        forceDownload: true
+      });
+      const queuedMedia = await enqueueRefreshMediaJob(mediaPayload);
+
+      await createJob(database, {
+        queueJobId: queuedMedia.jobId,
+        type: "refresh-media",
+        payload: mediaPayload,
+        status: queuedMedia.status,
+        attempts: queuedMedia.attempts,
+        lastError: queuedMedia.lastError,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    }
 
     discoverResult = await waitForDiscoveryOutcome({
       database,
