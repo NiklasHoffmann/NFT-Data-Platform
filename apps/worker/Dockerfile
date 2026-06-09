@@ -4,7 +4,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN NODE_OPTIONS=--max-old-space-size=1024 npm ci --include=dev
+# Keep install in development mode even if Coolify passes NODE_ENV=production as build arg.
+RUN NODE_ENV=development NODE_OPTIONS=--max-old-space-size=768 npm ci --include=dev --workspace @nft-platform/worker --include-workspace-root --no-audit --no-fund --loglevel=info
 
 ENV NODE_ENV=production
 
