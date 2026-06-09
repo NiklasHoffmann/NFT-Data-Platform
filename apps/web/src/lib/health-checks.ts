@@ -1,5 +1,9 @@
 import process from "node:process";
-import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { HeadBucketCommand } from "@aws-sdk/client-s3";
+import {
+  createStorageClientCandidates,
+  isStorageEndpointUnreachableError
+} from "@nft-platform/storage";
 import { getWebRuntimeConfig } from "./env";
 import { logger } from "./logger";
 import { getWebMongoDatabase } from "./mongodb";
@@ -10,10 +14,6 @@ export type DependencyHealth = {
   status: "ok" | "down";
   latencyMs: number;
   message: string | null;
-};
-
-const globalStorageRegistry = globalThis as typeof globalThis & {
-  __nftPlatformStorageClients__?: Map<string, S3Client>;
 };
 
 const HEALTH_PROBE_TIMEOUT_MS = 2_500;
@@ -85,22 +85,46 @@ export async function probeStorageHealth(): Promise<DependencyHealth> {
 
   try {
     const config = getWebRuntimeConfig();
-    const client = getStorageClient(config);
-    await client.send(
-      new HeadBucketCommand({
-        Bucket: config.storageBucket
-      }),
-      {
-        abortSignal: abortController.signal
-      }
-    );
+    const clients = createStorageClientCandidates({
+      endpoint: config.storageEndpoint,
+      region: config.storageRegion,
+      accessKey: config.storageAccessKey,
+      secretKey: config.storageSecretKey,
+      bucket: config.storageBucket,
+      publicBaseUrl: config.mediaPublicBaseUrl
+    });
+    let lastError: unknown;
 
-    return {
-      dependency: "storage",
-      status: "ok",
-      latencyMs: Date.now() - startedAt,
-      message: null
-    };
+    for (const client of clients) {
+      try {
+        await client.send(
+          new HeadBucketCommand({
+            Bucket: config.storageBucket
+          }),
+          {
+            abortSignal: abortController.signal
+          }
+        );
+
+        return {
+          dependency: "storage",
+          status: "ok",
+          latencyMs: Date.now() - startedAt,
+          message: null
+        };
+      } catch (error) {
+        lastError = error;
+
+        if (isStorageEndpointUnreachableError(error)) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw lastError ?? new Error("storage_endpoint_candidates_unreachable");
+
   } catch (error) {
     logger.warn("health_probe_storage_failed", { error });
 
@@ -132,29 +156,6 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, dependen
       clearTimeout(timeoutHandle);
     }
   }
-}
-
-function getStorageClient(config: ReturnType<typeof getWebRuntimeConfig>): S3Client {
-  const registry = (globalStorageRegistry.__nftPlatformStorageClients__ ??= new Map());
-  const cacheKey = `${config.storageEndpoint}|${config.storageRegion}|${config.storageBucket}|${config.storageAccessKey}`;
-  const existing = registry.get(cacheKey);
-
-  if (existing) {
-    return existing;
-  }
-
-  const client = new S3Client({
-    region: config.storageRegion,
-    endpoint: config.storageEndpoint,
-    credentials: {
-      accessKeyId: config.storageAccessKey,
-      secretAccessKey: config.storageSecretKey
-    },
-    forcePathStyle: true
-  });
-
-  registry.set(cacheKey, client);
-  return client;
 }
 
 function toSafeHealthErrorMessage(error: unknown): string {

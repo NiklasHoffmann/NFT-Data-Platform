@@ -2,6 +2,14 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import { z } from "zod";
 
+const ENDPOINT_UNREACHABLE_ERROR_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT"
+]);
+
 export const storageConfigSchema = z.object({
   endpoint: z.string().url(),
   region: z.string().min(1),
@@ -14,15 +22,62 @@ export const storageConfigSchema = z.object({
 export type StorageConfig = z.infer<typeof storageConfigSchema>;
 
 export function createStorageClient(config: StorageConfig): S3Client {
-  return new S3Client({
-    region: config.region,
-    endpoint: config.endpoint,
-    credentials: {
-      accessKeyId: config.accessKey,
-      secretAccessKey: config.secretKey
-    },
-    forcePathStyle: true
-  });
+  const [primaryClient] = createStorageClientCandidates(config);
+  return primaryClient;
+}
+
+export function createStorageClientCandidates(config: StorageConfig): S3Client[] {
+  const endpoints = buildStorageEndpointCandidates(config);
+
+  return endpoints.map((endpoint) =>
+    new S3Client({
+      region: config.region,
+      endpoint,
+      credentials: {
+        accessKeyId: config.accessKey,
+        secretAccessKey: config.secretKey
+      },
+      forcePathStyle: true
+    })
+  );
+}
+
+export function isStorageEndpointUnreachableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const nodeErrorCode = (error as { code?: unknown }).code;
+
+  if (typeof nodeErrorCode === "string" && ENDPOINT_UNREACHABLE_ERROR_CODES.has(nodeErrorCode)) {
+    return true;
+  }
+
+  const message = error.message.toLowerCase();
+
+  return (
+    message.includes("getaddrinfo enotfound") ||
+    message.includes("eai_again") ||
+    message.includes("econnrefused") ||
+    message.includes("econnreset")
+  );
+}
+
+function buildStorageEndpointCandidates(config: StorageConfig): string[] {
+  const primaryEndpoint = normalizeEndpoint(config.endpoint);
+  const candidates = [primaryEndpoint];
+
+  const publicOrigin = normalizeEndpoint(new URL(config.publicBaseUrl).origin);
+
+  if (!candidates.includes(publicOrigin)) {
+    candidates.push(publicOrigin);
+  }
+
+  return candidates;
+}
+
+function normalizeEndpoint(endpoint: string): string {
+  return endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
 }
 
 export async function uploadStorageObject(params: {

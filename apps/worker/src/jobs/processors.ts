@@ -55,7 +55,8 @@ import {
 import {
   buildImageDerivatives,
   buildMediaObjectKeys,
-  createStorageClient,
+  createStorageClientCandidates,
+  isStorageEndpointUnreachableError,
   type StorageConfig,
   uploadStorageObject
 } from "@nft-platform/storage";
@@ -919,7 +920,7 @@ async function handleRefreshMedia(
     throw new Error("Token has no media sources to process.");
   }
 
-  const storageClient = createStorageClient(context.storage);
+  const storageClients = createStorageClientCandidates(context.storage);
   const assetIdsByKind: Partial<Record<"image" | "animation" | "audio", typeof token._id>> = {};
   const failedKinds: Array<"image" | "animation" | "audio"> = [];
   const retryPendingKinds: Array<"image" | "animation" | "audio"> = [];
@@ -942,8 +943,8 @@ async function handleRefreshMedia(
         kind: mediaSource.kind,
         checksumSha256
       });
-      const uploadResult = await uploadStorageObject({
-        client: storageClient,
+      const uploadResult = await uploadStorageObjectWithEndpointFallback({
+        clients: storageClients,
         config: context.storage,
         key: objectKeys.original,
         body: downloadedMedia.bytes,
@@ -956,8 +957,8 @@ async function handleRefreshMedia(
         bytes: downloadedMedia.bytes
       });
       const optimizedUploadResult = imageDerivatives
-        ? await uploadStorageObject({
-            client: storageClient,
+        ? await uploadStorageObjectWithEndpointFallback({
+            clients: storageClients,
             config: context.storage,
             key: objectKeys.optimized,
             body: imageDerivatives.optimized.bytes,
@@ -966,8 +967,8 @@ async function handleRefreshMedia(
           })
         : null;
       const thumbnailUploadResult = imageDerivatives
-        ? await uploadStorageObject({
-            client: storageClient,
+        ? await uploadStorageObjectWithEndpointFallback({
+            clients: storageClients,
             config: context.storage,
             key: objectKeys.thumbnail,
             body: imageDerivatives.thumbnail.bytes,
@@ -2942,4 +2943,38 @@ export async function enqueueFollowUpMediaRefresh(params: {
   await queue.close();
 
   return queueJobId;
+}
+
+async function uploadStorageObjectWithEndpointFallback(params: {
+  clients: ReturnType<typeof createStorageClientCandidates>;
+  config: StorageConfig;
+  key: string;
+  body: Uint8Array;
+  contentType?: string | null;
+  cacheControl?: string;
+}): Promise<{ publicUrl: string }> {
+  let lastError: unknown;
+
+  for (const client of params.clients) {
+    try {
+      return await uploadStorageObject({
+        client,
+        config: params.config,
+        key: params.key,
+        body: params.body,
+        contentType: params.contentType,
+        cacheControl: params.cacheControl
+      });
+    } catch (error) {
+      lastError = error;
+
+      if (isStorageEndpointUnreachableError(error)) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError ?? new Error("storage_endpoint_candidates_unreachable");
 }
