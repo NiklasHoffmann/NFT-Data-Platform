@@ -608,7 +608,7 @@ async function handleRefreshToken(
         chainId: payload.chainId,
         contractAddress: payload.contractAddress,
         tokenId: payload.tokenId,
-        forceDownload: payload.forceMetadata
+        forceDownload: payload.forceMetadata || persistedToken.mediaStatus === "failed"
       }
     });
   }
@@ -2957,14 +2957,16 @@ async function uploadStorageObjectWithEndpointFallback(params: {
 
   for (const client of params.clients) {
     try {
-      return await uploadStorageObject({
+      const uploadParams = {
         client,
         config: params.config,
         key: params.key,
         body: params.body,
-        contentType: params.contentType,
-        cacheControl: params.cacheControl
-      });
+        ...(params.contentType !== undefined ? { contentType: params.contentType } : {}),
+        ...(params.cacheControl !== undefined ? { cacheControl: params.cacheControl } : {})
+      };
+
+      return await uploadStorageObject(uploadParams);
     } catch (error) {
       lastError = error;
 

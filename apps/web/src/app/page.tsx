@@ -462,7 +462,7 @@ export default async function HomePage(props: {
                                   <dt>Interactive asset</dt>
                                   <dd>
                                     {renderDetailActionLinks([
-                                      { label: "Open interactive", href: token.interactiveOriginalUrl }
+                                      { label: "Open interactive", href: toBrowserSafeDetailUrl(token.interactiveOriginalUrl) }
                                     ])}
                                   </dd>
                                 </div>
@@ -678,19 +678,19 @@ export default async function HomePage(props: {
                           <dl className="detail-list">
                             <div>
                               <dt>Source URL</dt>
-                              <dd>{renderDetailActionLinks([{ label: "Open source", href: asset.sourceUrl }])}</dd>
+                              <dd>{renderDetailActionLinks([{ label: "Open source", href: toBrowserSafeDetailUrl(asset.sourceUrl) }])}</dd>
                             </div>
                             <div>
                               <dt>Original CDN</dt>
-                              <dd>{renderDetailActionLinks([{ label: "Open original", href: asset.cdnUrlOriginal }])}</dd>
+                              <dd>{renderDetailActionLinks([{ label: "Open original", href: toBrowserSafeDetailUrl(asset.cdnUrlOriginal) }])}</dd>
                             </div>
                             <div>
                               <dt>Optimized CDN</dt>
-                              <dd>{renderDetailActionLinks([{ label: "Open optimized", href: asset.cdnUrlOptimized }])}</dd>
+                              <dd>{renderDetailActionLinks([{ label: "Open optimized", href: toBrowserSafeDetailUrl(asset.cdnUrlOptimized) }])}</dd>
                             </div>
                             <div>
                               <dt>Thumbnail CDN</dt>
-                              <dd>{renderDetailActionLinks([{ label: "Open thumbnail", href: asset.cdnUrlThumbnail }])}</dd>
+                              <dd>{renderDetailActionLinks([{ label: "Open thumbnail", href: toBrowserSafeDetailUrl(asset.cdnUrlThumbnail) }])}</dd>
                             </div>
                             <div>
                               <dt>MIME type</dt>
@@ -2389,14 +2389,16 @@ function buildMediaActionLinks(
   const seenHrefs = new Set<string>();
 
   for (const candidate of candidates) {
-    if (!candidate.href || seenHrefs.has(candidate.href)) {
+    const browserSafeHref = toBrowserSafeDetailUrl(candidate.href);
+
+    if (!browserSafeHref || seenHrefs.has(browserSafeHref)) {
       continue;
     }
 
-    seenHrefs.add(candidate.href);
+    seenHrefs.add(browserSafeHref);
     actions.push({
       label: candidate.label,
-      href: candidate.href
+      href: browserSafeHref
     });
   }
 
