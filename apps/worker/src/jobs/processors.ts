@@ -30,6 +30,7 @@ import {
   deleteTokenAndDependents,
   findAllErc1155BalancesForToken,
   findCollectionByIdentity,
+  findMediaAssetsByIds,
   listTokens,
   listErc1155Balances,
   findTokenByIdentity,
@@ -591,6 +592,14 @@ async function handleRefreshToken(
     });
   }
 
+  const shouldForceMediaDownload = metadata?.hasDownloadableMedia
+    ? await resolveForceMediaDownload({
+        database: context.database,
+        token: persistedToken,
+        forceMetadata: payload.forceMetadata
+      })
+    : false;
+
   if (collection.standard === "erc721" && onChainToken.ownerAddress) {
     await upsertErc721Ownership(context.database, {
       chainId: payload.chainId,
@@ -608,7 +617,7 @@ async function handleRefreshToken(
         chainId: payload.chainId,
         contractAddress: payload.contractAddress,
         tokenId: payload.tokenId,
-        forceDownload: payload.forceMetadata || persistedToken.mediaStatus === "failed"
+        forceDownload: shouldForceMediaDownload
       }
     });
   }
@@ -671,6 +680,51 @@ async function handleRefreshToken(
     metadataUriResolved: onChainToken.metadataUriResolved,
     metadataError
   };
+}
+
+async function resolveForceMediaDownload(params: {
+  database: Db;
+  token: Awaited<ReturnType<typeof findTokenByIdentity>>;
+  forceMetadata: boolean;
+}): Promise<boolean> {
+  if (!params.token) {
+    return params.forceMetadata;
+  }
+
+  if (params.forceMetadata || params.token.mediaStatus === "failed") {
+    return true;
+  }
+
+  if (!params.token.imageAssetId) {
+    return false;
+  }
+
+  const [imageAsset] = await findMediaAssetsByIds({
+    database: params.database,
+    assetIds: [params.token.imageAssetId]
+  });
+
+  return shouldBackfillImageDerivatives(imageAsset);
+}
+
+function shouldBackfillImageDerivatives(
+  imageAsset: Awaited<ReturnType<typeof findMediaAssetsByIds>>[number] | undefined
+): boolean {
+  if (!imageAsset || imageAsset.kind !== "image" || imageAsset.status !== "ready") {
+    return false;
+  }
+
+  if (!imageAsset.cdnUrlOriginal || !imageAsset.mimeType?.startsWith("image/")) {
+    return false;
+  }
+
+  const normalizedMimeType = imageAsset.mimeType.split(";")[0]?.trim().toLowerCase();
+
+  if (normalizedMimeType === "image/svg+xml") {
+    return false;
+  }
+
+  return !imageAsset.cdnUrlOptimized || !imageAsset.cdnUrlThumbnail;
 }
 
 async function removeMissingTokenFromReadModel(params: {
