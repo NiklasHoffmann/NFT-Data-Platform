@@ -149,6 +149,10 @@ Wallet discover response shape:
 }
 ```
 
+Every nullable field in `token` and `collection` is always present in the response, using `null`
+when there is no value. Fields are never omitted, so a strict client-side schema can rely on the
+shape being stable.
+
 Regular wallet inventory response shape:
 
 ```json
@@ -229,7 +233,7 @@ Regular wallet inventory response shape:
   "pageInfo": {
     "limit": 50,
     "hasMore": true,
-    "nextCursor": "2026-05-12T08:29:30.000Z_6821a1d2d6d0e3f1a4d92d84"
+    "nextCursor": "eyJ1cGRhdGVkQXQiOiIyMDI2LTA1LTEyVDA4OjI5OjMwLjAwMFoiLCJpZCI6IjY4MjFhMWQyZDZkMGUzZjFhNGQ5MmQ4NCJ9"
   }
 }
 ```
@@ -352,5 +356,5 @@ export async function getWalletInventory(params: {
 1. Call the multi-chain wallet endpoint from your server.
 2. Render `items[].token` directly for NFT cards.
 3. Use `items[].collection` for collection name, symbol, and visual context.
-4. Use `pageInfo.nextCursor` for infinite scroll or pagination.
+4. Use `pageInfo.nextCursor` for infinite scroll or pagination. Treat it as an opaque string: it is a base64url-encoded payload and its internal format is not part of the API contract.
 5. Fall back gracefully when `token` or `collection` is `null`, because holdings can exist before all metadata is fully materialized.

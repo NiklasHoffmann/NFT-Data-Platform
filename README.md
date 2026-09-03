@@ -38,7 +38,7 @@ NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and servi
 - Runs optional background chain indexing for active collections.
 - Writes normalized state back into MongoDB instead of reading on-chain during API requests.
 
-### packages/*
+### packages/\*
 
 - `domain`: shared enums, schemas, and blockchain-facing data contracts.
 - `db`: Mongo client, validators, indexes, and read/write helpers.
@@ -75,6 +75,18 @@ Token and collection media are mirrored into object storage when possible. The a
 ### Background indexing
 
 The worker supports both targeted refresh jobs and optional ongoing chain indexing. Collection documents track observed and indexed checkpoints so the system can enqueue bounded `reindex-range` jobs instead of repeatedly scanning entire chains.
+
+Indexing deliberately stops short of the chain head by `CHAIN_INDEXING_CONFIRMATIONS` blocks. A block near the head can still be reorged away, and transfers read from an orphaned block would be written into the read model and never corrected — the reindex job for that range is deduplicated by its idempotency key, so a second attempt is dropped. `lastObservedBlock` still records the true head, so the operator view shows the real indexing lag rather than the confirmed one.
+
+The indexing loop holds a Redis lock and reads each chain head once per tick rather than once per collection, so running several worker replicas neither multiplies RPC cost nor races on progress writes.
+
+### Keeping the read model current
+
+Indexed data ages: a mutable `tokenURI`, a re-pinned IPFS document, or a delayed reveal all change metadata after a token was first indexed. Two mechanisms keep the read model from drifting, both driven by the same TTL configuration.
+
+- **Read-path revalidation.** A token read answers from MongoDB and, when the record has aged past its TTL, queues a refresh behind the response. The request is never blocked on chain or metadata IO. Responses carry a `freshness` block (`lastMetadataFetchAt`, `ageSeconds`, `isStale`, `revalidationQueued`) so consumers can see what they got. A Redis marker collapses repeated reads of the same stale token into one queued refresh.
+- **Materialized collection counters.** `indexedTokenCount`, `holderCount`, and `previewTokenId` are computed by the worker whenever a collection, one of its tokens, or a block range is refreshed, and stored on the collection document. Reads use the stored values instead of grouping every ownership row and ranking every token per request. The trade-off is bounded staleness: the counters are as current as the last refresh of that collection.
+- **Worker sweep.** An interval loop in the worker re-queues the tokens and collections whose metadata is oldest, in bounded batches. Tokens in `failed` state use their own retry window, so a permanently broken metadata URI cannot monopolise every batch. The sweep holds a Redis lock, so running several worker replicas does not multiply the RPC load.
 
 ## Why the project is technically interesting
 
@@ -156,6 +168,20 @@ Legacy `RPC_MAINNET_URL` and `RPC_SEPOLIA_URL` names are still accepted in code 
 - `CHAIN_INDEXING_BATCH_SIZE`
 - `CHAIN_INDEXING_MAX_BLOCK_RANGE`
 - `CHAIN_INDEXING_COLLECTION_ALLOWLIST`
+- `CHAIN_INDEXING_CONFIRMATIONS` — blocks to stay behind the chain head so reorged blocks are never indexed
+- `WORKER_CONCURRENCY` — jobs processed in parallel per queue; `reindex-range` stays serial regardless
+- `WORKER_RATE_LIMIT_MAX` / `WORKER_RATE_LIMIT_DURATION_MS` — caps how fast the worker pulls jobs, to stay inside an RPC provider rate limit (`0` disables)
+
+### Data freshness
+
+- `TOKEN_METADATA_TTL_SECONDS` — how long stored token metadata is considered current (web + worker)
+- `TOKEN_METADATA_FAILURE_RETRY_SECONDS` — separate, usually longer, retry window for tokens in `failed` state (web + worker)
+- `COLLECTION_METADATA_TTL_SECONDS` — collection-level equivalent (worker)
+- `READ_REVALIDATION_ENABLED` — serve the stored token immediately and queue a refresh behind the response (web)
+- `READ_REVALIDATION_DEBOUNCE_SECONDS` — collapses repeated reads of the same stale token into one queued refresh (web)
+- `METADATA_SWEEP_ENABLED` — periodic worker sweep that re-queues whatever has aged out of its TTL (worker)
+- `METADATA_SWEEP_INTERVAL_MS`
+- `METADATA_SWEEP_BATCH_SIZE`
 
 ## Representative routes
 

@@ -1,10 +1,8 @@
 import { ObjectId, type Db } from "mongodb";
 import {
-  countHoldersForCollections,
-  countTokensForCollections,
-  findLatestTokensForCollections,
   findRecentTokensForCollections,
   findMediaAssetsByIds,
+  findTokensByIds,
   serializeCollectionDocument,
   serializeMediaAssetDocument,
   serializeTokenDocument,
@@ -26,40 +24,28 @@ export async function serializeEnrichedCollections(database: Db, collections: Co
     return [];
   }
 
-  const previewTokens = await findLatestTokensForCollections({
-    database,
-    collections: collections.map((collection) => ({
-      chainId: collection.chainId,
-      contractAddress: collection.contractAddress
-    }))
-  });
-  const recentTokens = await findRecentTokensForCollections({
-    database,
-    collections: collections.map((collection) => ({
-      chainId: collection.chainId,
-      contractAddress: collection.contractAddress
-    })),
-    limitPerCollection: 6
-  });
-  const tokenCountsByCollection = await countTokensForCollections({
-    database,
-    collections: collections.map((collection) => ({
-      chainId: collection.chainId,
-      contractAddress: collection.contractAddress
-    }))
-  });
-  const holderCountsByCollection = await countHoldersForCollections({
-    database,
-    collections: collections.map((collection) => ({
-      chainId: collection.chainId,
-      contractAddress: collection.contractAddress
-    }))
-  });
+  const collectionIdentities = collections.map((collection) => ({
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress
+  }));
+  // Token counts, holder counts and the preview token are materialized on the collection document
+  // by the worker, so a read is a bounded lookup instead of four aggregations over every token and
+  // ownership row of every collection on the page.
+  const previewTokenIds = collections.reduce<ObjectId[]>(
+    (ids, collection) => (collection.previewTokenId ? [...ids, collection.previewTokenId] : ids),
+    []
+  );
+  const [previewTokens, recentTokens] = await Promise.all([
+    findTokensByIds({ database, tokenIds: previewTokenIds }),
+    findRecentTokensForCollections({
+      database,
+      collections: collectionIdentities,
+      limitPerCollection: 6
+    })
+  ]);
   const serializedPreviewTokens = previewTokens.map(serializeTokenDocument);
   const serializedRecentTokens = recentTokens.map(serializeTokenDocument);
-  const previewTokensByCollection = new Map(
-    serializedPreviewTokens.map((token) => [`${token.chainId}:${token.contractAddress}`, token])
-  );
+  const previewTokensById = new Map(serializedPreviewTokens.map((token) => [token._id, token]));
   const recentTokensByCollection = new Map<string, ReturnType<typeof serializeTokenDocument>[]>();
 
   for (const token of serializedRecentTokens) {
@@ -81,7 +67,9 @@ export async function serializeEnrichedCollections(database: Db, collections: Co
   );
 
   return collections.map((collection) => {
-    const previewToken = previewTokensByCollection.get(`${collection.chainId}:${collection.contractAddress}`);
+    const previewToken = collection.previewTokenId
+      ? previewTokensById.get(collection.previewTokenId.toHexString())
+      : undefined;
     const serializedCollection = resolveSerializedCollectionMediaFields(serializeCollectionDocument(collection));
     const previewImage = previewToken?.imageAssetId ? mediaAssetsById.get(previewToken.imageAssetId) ?? null : null;
     const previewAnimation = previewToken?.animationAssetId ? mediaAssetsById.get(previewToken.animationAssetId) ?? null : null;
@@ -101,10 +89,6 @@ export async function serializeEnrichedCollections(database: Db, collections: Co
 
     return {
       ...serializedCollection,
-      indexedTokenCount:
-        tokenCountsByCollection.get(`${collection.chainId}:${collection.contractAddress}`) ??
-        serializedCollection.indexedTokenCount,
-      holderCount: holderCountsByCollection.get(`${collection.chainId}:${collection.contractAddress}`) ?? 0,
       coverImageSource,
       recentTokens: recentCollectionTokens.map((token) => ({
         tokenId: token.tokenId,

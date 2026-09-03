@@ -45,6 +45,79 @@ type AuthenticationSuccess = {
 
 type AuthenticationResult = AuthenticationFailure | AuthenticationSuccess;
 
+type CachedApiClientEntry = {
+  client: AuthenticatedApiClient & { source: "database" };
+  expiresAt: number;
+};
+
+/**
+ * Resolving an API client costs a MongoDB lookup plus an AES decryption of the stored secret on
+ * every authenticated request. Caching the resolved client for a short window removes both from
+ * the hot path. The trade-off is that a revoked or re-scoped client stays usable for at most this
+ * long; keep it short enough that a revocation still takes effect promptly.
+ */
+const apiClientCacheTtlMs = 60_000;
+
+const globalApiClientCacheRegistry = globalThis as typeof globalThis & {
+  __nftPlatformApiClientCache__?: Map<string, CachedApiClientEntry>;
+};
+
+function getApiClientCache(): Map<string, CachedApiClientEntry> {
+  return (globalApiClientCacheRegistry.__nftPlatformApiClientCache__ ??= new Map());
+}
+
+function readCachedApiClient(keyHash: string): (AuthenticatedApiClient & { source: "database" }) | null {
+  const cache = getApiClientCache();
+  const entry = cache.get(keyHash);
+
+  if (!entry) {
+    return null;
+  }
+
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(keyHash);
+    return null;
+  }
+
+  return entry.client;
+}
+
+// Only successful lookups are cached, so an unknown key can never populate the map and a newly
+// created client becomes visible on its first request.
+function writeCachedApiClient(
+  keyHash: string,
+  client: AuthenticatedApiClient & { source: "database" }
+): void {
+  getApiClientCache().set(keyHash, {
+    client,
+    expiresAt: Date.now() + apiClientCacheTtlMs
+  });
+}
+
+/**
+ * `lastUsedAt` exists to tell an operator whether a client is still in use, which does not need
+ * per-request resolution. Throttling it keeps a busy client from issuing one write per request
+ * against `api_clients`.
+ */
+const apiClientUsageWriteIntervalMs = 60_000;
+
+const globalApiClientUsageRegistry = globalThis as typeof globalThis & {
+  __nftPlatformApiClientUsageWrites__?: Map<string, number>;
+};
+
+function shouldMarkApiClientUsed(clientId: string): boolean {
+  const usageWrites = (globalApiClientUsageRegistry.__nftPlatformApiClientUsageWrites__ ??= new Map());
+  const now = Date.now();
+  const lastWrittenAt = usageWrites.get(clientId);
+
+  if (lastWrittenAt !== undefined && now - lastWrittenAt < apiClientUsageWriteIntervalMs) {
+    return false;
+  }
+
+  usageWrites.set(clientId, now);
+  return true;
+}
+
 export function withAuthenticatedRoute<TContext>(
   requiredScopes: Scope[],
   handler: (params: {
@@ -61,7 +134,7 @@ export function withAuthenticatedRoute<TContext>(
     if (!authResult.ok) {
       const responseTimeMs = Date.now() - startedAt;
 
-      await writeAuditLog({
+      scheduleAuditLog({
         clientId: authResult.clientId,
         scope: requestedScope,
         method: request.method,
@@ -96,7 +169,7 @@ export function withAuthenticatedRoute<TContext>(
 
       attachRateLimitHeaders(response, authResult.value.rateLimit);
 
-      await writeAuditLog({
+      scheduleAuditLog({
         clientId: authResult.value.client.clientId,
         scope: requestedScope,
         method: request.method,
@@ -128,7 +201,7 @@ export function withAuthenticatedRoute<TContext>(
         error
       });
 
-      await writeAuditLog({
+      scheduleAuditLog({
         clientId: authResult.value.client.clientId,
         scope: requestedScope,
         method: request.method,
@@ -331,7 +404,7 @@ export async function authenticateApiRequest(
     });
   }
 
-  if (resolvedClient.source === "database") {
+  if (resolvedClient.source === "database" && shouldMarkApiClientUsed(resolvedClient.clientId)) {
     void markApiClientUsed({
       database,
       clientId: resolvedClient.clientId,
@@ -365,6 +438,11 @@ async function resolveApiClient(params: {
 }): Promise<(AuthenticatedApiClient & { source: "database" | "env" }) | null> {
   const config = getWebRuntimeConfig();
   const keyHash = sha256Hex(params.apiKey);
+  const cachedClient = readCachedApiClient(keyHash);
+
+  if (cachedClient) {
+    return cachedClient.clientId === params.headerClientId ? cachedClient : null;
+  }
 
   try {
     const databaseClient = await findApiClientByKeyHash({
@@ -373,7 +451,7 @@ async function resolveApiClient(params: {
     });
 
     if (databaseClient) {
-      if (databaseClient.clientId !== params.headerClientId || databaseClient.status !== "active") {
+      if (databaseClient.status !== "active") {
         return null;
       }
 
@@ -381,7 +459,7 @@ async function resolveApiClient(params: {
         return null;
       }
 
-      return {
+      const resolvedClient: AuthenticatedApiClient & { source: "database" } = {
         clientId: databaseClient.clientId,
         clientName: databaseClient.clientName,
         keyPrefix: databaseClient.keyPrefix,
@@ -396,6 +474,10 @@ async function resolveApiClient(params: {
         }),
         source: "database"
       };
+
+      writeCachedApiClient(keyHash, resolvedClient);
+
+      return resolvedClient.clientId === params.headerClientId ? resolvedClient : null;
     }
   } catch (error) {
     logger.error("auth_resolve_client_failed", {
@@ -476,6 +558,24 @@ async function consumeReplayGuard(params: {
 
   const writeResult = await redis.set(redisKey, "1", "EX", params.ttlSeconds, "NX");
   return writeResult === "OK";
+}
+
+/**
+ * Audit logging is operational bookkeeping, not part of the response contract. Awaiting it would
+ * add a MongoDB round trip to the latency of every authenticated request, so the write is started
+ * and left to settle on its own; `writeAuditLog` already swallows and logs its own failures.
+ */
+function scheduleAuditLog(params: {
+  clientId: string;
+  scope: Scope | null;
+  method: string;
+  path: string;
+  statusCode: number;
+  responseTimeMs: number;
+  ip: string | null;
+  rateLimitDecision: "allow" | "deny";
+}): void {
+  void writeAuditLog(params);
 }
 
 async function writeAuditLog(params: {

@@ -1,11 +1,12 @@
 import { Queue } from "bullmq";
 import {
-  buildQueueAddOptions,
+  enqueueQueueJob,
   queueNames,
   refreshCollectionJobSchema,
   refreshMediaJobSchema,
   reindexRangeJobSchema,
   refreshTokenJobSchema,
+  type EnqueuedJobResult,
   type QueueName
 } from "@nft-platform/queue";
 import { getRedisClient } from "./redis";
@@ -14,21 +15,20 @@ const globalQueueRegistry = globalThis as typeof globalThis & {
   __nftPlatformQueues__?: Map<QueueName, Queue>;
 };
 
-type EnqueuedJobResult = {
-  jobId: string;
-  status: "queued" | "running" | "done" | "failed";
-  attempts: number;
-  lastError: string | null;
-};
-
-export async function enqueueRefreshTokenJob(payload: unknown): Promise<EnqueuedJobResult> {
+export async function enqueueRefreshTokenJob(
+  payload: unknown,
+  options?: { allowReenqueueCompleted?: boolean }
+): Promise<EnqueuedJobResult> {
   const parsedPayload = refreshTokenJobSchema.parse(payload);
-  return enqueueJob(queueNames.refreshToken, parsedPayload);
+  return enqueueJob(queueNames.refreshToken, parsedPayload, options);
 }
 
-export async function enqueueRefreshCollectionJob(payload: unknown): Promise<EnqueuedJobResult> {
+export async function enqueueRefreshCollectionJob(
+  payload: unknown,
+  options?: { allowReenqueueCompleted?: boolean }
+): Promise<EnqueuedJobResult> {
   const parsedPayload = refreshCollectionJobSchema.parse(payload);
-  return enqueueJob(queueNames.refreshCollection, parsedPayload);
+  return enqueueJob(queueNames.refreshCollection, parsedPayload, options);
 }
 
 export async function enqueueRefreshMediaJob(payload: unknown): Promise<EnqueuedJobResult> {
@@ -41,7 +41,7 @@ export async function enqueueReindexRangeJob(payload: unknown): Promise<Enqueued
   return enqueueJob(queueNames.reindexRange, parsedPayload);
 }
 
-function getQueue(queueName: QueueName): Queue {
+export function getQueue(queueName: QueueName): Queue {
   const registry = (globalQueueRegistry.__nftPlatformQueues__ ??= new Map());
   const existingQueue = registry.get(queueName);
 
@@ -57,64 +57,15 @@ function getQueue(queueName: QueueName): Queue {
   return queue;
 }
 
-async function enqueueJob(queueName: QueueName, payload: unknown): Promise<EnqueuedJobResult> {
-  const queueAddOptions = buildQueueAddOptions(queueName, payload);
-  const jobId = queueAddOptions.jobId;
-  const queue = getQueue(queueName);
-
-  const existingJob = await queue.getJob(jobId);
-
-  if (existingJob) {
-    const state = await existingJob.getState();
-
-    if (shouldReenqueueExistingJob(payload, state)) {
-      await existingJob.remove();
-    } else {
-      return {
-        jobId,
-        status: mapBullMqStateToJobStatus(state),
-        attempts: existingJob.attemptsMade,
-        lastError: null
-      };
-    }
-  }
-
-  await queue.add(queueName, payload, queueAddOptions);
-
-  return {
-    jobId,
-    status: "queued",
-    attempts: 0,
-    lastError: null
-  };
-}
-
-function shouldReenqueueExistingJob(payload: unknown, state: string): boolean {
-  if (state === "failed") {
-    return true;
-  }
-
-  if (state !== "completed" || !payload || typeof payload !== "object") {
-    return false;
-  }
-
-  const candidate = payload as Record<string, unknown>;
-
-  return candidate.forceMetadata === true ||
-    candidate.forceOwnership === true ||
-    candidate.forceDownload === true ||
-    candidate.fullRescan === true;
-}
-
-function mapBullMqStateToJobStatus(state: string): "queued" | "running" | "done" | "failed" {
-  switch (state) {
-    case "completed":
-      return "done";
-    case "failed":
-      return "failed";
-    case "active":
-      return "running";
-    default:
-      return "queued";
-  }
+async function enqueueJob(
+  queueName: QueueName,
+  payload: unknown,
+  options?: { allowReenqueueCompleted?: boolean }
+): Promise<EnqueuedJobResult> {
+  return enqueueQueueJob({
+    queue: getQueue(queueName),
+    queueName,
+    payload,
+    allowReenqueueCompleted: options?.allowReenqueueCompleted ?? false
+  });
 }

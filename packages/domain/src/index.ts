@@ -77,6 +77,17 @@ export const evmTokenIdSchema = z
 
 export const walletAddressSchema = evmAddressSchema;
 
+/**
+ * An EVM address in the same casing the read model stores it in.
+ *
+ * Anything that is keyed by address — a job's idempotency key above all — has to agree on one
+ * spelling, otherwise a checksummed address and its lowercase equivalent describe the same work
+ * under two different keys.
+ */
+export const normalizedEvmAddressSchema = evmAddressSchema.transform((value) =>
+  normalizeContractAddress(value)
+);
+
 export const tokenIdentitySchema = z.object({
   chainId: z.number().int().positive(),
   contractAddress: evmAddressSchema,

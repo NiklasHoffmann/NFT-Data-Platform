@@ -128,9 +128,50 @@ Optional web controls:
 2. `API_MAX_REQUEST_BYTES=1048576`
 3. `PUBLIC_READ_RATE_LIMIT_PER_MINUTE=180`
 
-## 6. One-Time Database Bootstrap
+Data freshness (web and worker must agree on the two token values, otherwise the read path and the
+sweep disagree on what counts as stale):
 
-In production mode, the worker does not auto-bootstrap validators and indexes. Run this once after first deploy.
+1. `TOKEN_METADATA_TTL_SECONDS=86400`
+2. `TOKEN_METADATA_FAILURE_RETRY_SECONDS=21600`
+3. `COLLECTION_METADATA_TTL_SECONDS=604800`
+4. `READ_REVALIDATION_ENABLED=true`
+5. `READ_REVALIDATION_DEBOUNCE_SECONDS=300`
+6. `METADATA_SWEEP_ENABLED=false`
+7. `METADATA_SWEEP_INTERVAL_MS=60000`
+8. `METADATA_SWEEP_BATCH_SIZE=25`
+
+Worker throughput and chain indexing:
+
+1. `WORKER_CONCURRENCY=4` — jobs processed in parallel per queue. `reindex-range` stays serial
+   regardless, because parallel range jobs on one collection would interleave ownership writes.
+   Lower this if your RPC plan is tight.
+2. `WORKER_RATE_LIMIT_MAX=0` — caps how fast the worker pulls jobs, to stay inside an RPC provider
+   rate limit. `0` disables the cap.
+3. `WORKER_RATE_LIMIT_DURATION_MS=1000`
+4. `CHAIN_INDEXING_ENABLED=false`
+5. `CHAIN_INDEXING_POLL_INTERVAL_MS=30000`
+6. `CHAIN_INDEXING_BATCH_SIZE=10`
+7. `CHAIN_INDEXING_MAX_BLOCK_RANGE=2000`
+8. `CHAIN_INDEXING_CONFIRMATIONS=12` — blocks to stay behind the chain head. Lowering this risks
+   indexing blocks that are later reorged away, which is not repaired automatically.
+9. `CHAIN_INDEXING_COLLECTION_ALLOWLIST=`
+
+If you turn on `METADATA_SWEEP_ENABLED` for the first time, keep `WORKER_CONCURRENCY` low for the
+initial run: everything indexed before the TTL existed looks stale at once, so the sweep will pull
+a full batch every interval until it catches up.
+
+## 6. Database Bootstrap
+
+In production mode, the worker does not auto-bootstrap validators and indexes. Run `npm run db:init`
+after the first deploy, and again after any deploy that adds fields or indexes — it is idempotent.
+
+`db:init` uses the `collMod` command for schema validators and index retention, which requires
+`dbAdmin` on the database. The `root` user from step 2 has it; a user created with `readWrite` only
+does not, and the run will fail with an explicit message saying so.
+
+Run it once now, and re-run it after deploying a version that introduces new fields: it backfills
+defaults for collection documents written before those fields existed. Without that backfill the
+API would serve `undefined` for them.
 
 PowerShell example from a trusted machine with repo checkout:
 
@@ -151,6 +192,9 @@ npm run db:init
 2. `GET /api/health` returns all dependencies as `ok`.
 3. Trigger one media refresh and verify storage object appears in `nft-media`.
 4. Redeploy app and confirm Mongo/Redis/MinIO containers are not restarted.
+5. Read one indexed token and confirm the response carries a `freshness` block.
+6. Confirm no collection document is missing `indexedTokenCount`, `holderCount`, or
+   `previewTokenId`, which would mean step 6 was skipped.
 
 ## 8. Common Misconfigurations
 

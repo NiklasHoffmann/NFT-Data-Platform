@@ -5,6 +5,7 @@ import { getWebMongoDatabase } from "../../../../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../../../../lib/api-auth";
 import { serializeEnrichedCollection } from "../../../../../../../lib/collection-response";
 import { buildTokenLookup } from "../../../../../../../lib/lookup-status";
+import { revalidateTokenIfStale } from "../../../../../../../lib/revalidation";
 import { serializeEnrichedToken } from "../../../../../../../lib/token-response";
 
 export const dynamic = "force-dynamic";
@@ -69,6 +70,13 @@ const getHandler = withAuthenticatedRoute<TokenRouteContext>(
       });
     }
 
+    // Answer from the read model and let a refresh run behind the response when the token has
+    // aged past its TTL, rather than making the caller wait on chain and metadata IO.
+    const [serializedToken, freshness] = await Promise.all([
+      serializeEnrichedToken(database, token),
+      revalidateTokenIfStale(token, new Date())
+    ]);
+
     return buildApiSuccessResponse({
       lookup,
       requestedIdentity: {
@@ -77,7 +85,8 @@ const getHandler = withAuthenticatedRoute<TokenRouteContext>(
         tokenId: params.tokenId
       },
       collection: serializedCollection,
-      item: await serializeEnrichedToken(database, token)
+      freshness,
+      item: serializedToken
     });
   }
 );

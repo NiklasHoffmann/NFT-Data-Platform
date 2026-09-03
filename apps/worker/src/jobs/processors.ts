@@ -24,13 +24,13 @@ import {
 import { normalizeWalletAddress, type InteractiveMediaType, type TokenAttribute } from "@nft-platform/domain";
 import {
   type CollectionDocument,
-  countTokensForCollections,
   createMetadataVersion,
   deleteErc721Ownership,
   deleteTokenAndDependents,
   findAllErc1155BalancesForToken,
   findCollectionByIdentity,
   findMediaAssetsByIds,
+  refreshCollectionMaterializedStats,
   listTokens,
   listErc1155Balances,
   findTokenByIdentity,
@@ -69,6 +69,9 @@ type JobProcessingContext = {
   storage: StorageConfig;
   mediaMaxVideoBytes: number;
 };
+
+const METADATA_FETCH_TIMEOUT_MS = 10_000;
+const MAX_METADATA_PAYLOAD_BYTES = 1_000_000;
 
 export async function processQueueJob(params: {
   queueName: QueueName;
@@ -241,10 +244,19 @@ async function handleRefreshCollection(
     contractAddress: payload.contractAddress
   });
   const collection = await ensureCollectionRegistration(payload, context, existingCollection);
+  const materializedStats = await refreshCollectionMaterializedStats({
+    database: context.database,
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress,
+    standard: collection.standard,
+    updatedAt: new Date()
+  });
 
   return {
     collectionUpdated: true,
     collectionCreated: !existingCollection,
+    indexedTokenCount: materializedStats.indexedTokenCount,
+    holderCount: materializedStats.holderCount,
     syncStatus: collection.syncStatus,
     standard: collection.standard,
     deployBlock: collection.deployBlock,
@@ -314,6 +326,8 @@ async function ensureCollectionRegistration(
 
   try {
     collectionMetadata = await resolveCollectionMetadata({
+      chainId: payload.chainId,
+      contractAddress: payload.contractAddress,
       rawUri: onChainCollection.contractUriRaw,
       resolvedUri: onChainCollection.contractUriResolved
     });
@@ -488,6 +502,9 @@ async function handleRefreshToken(
 
   try {
     metadata = await resolveMetadata({
+      chainId: payload.chainId,
+      contractAddress: payload.contractAddress,
+      tokenId: payload.tokenId,
       rawUri: onChainToken.metadataUriRaw,
       resolvedUri: onChainToken.metadataUriResolved
     });
@@ -622,16 +639,6 @@ async function handleRefreshToken(
     });
   }
 
-  const collectionTokenCounts = await countTokensForCollections({
-    database: context.database,
-    collections: [
-      {
-        chainId: collection.chainId,
-        contractAddress: collection.contractAddress
-      }
-    ]
-  });
-
   await upsertCollection(context.database, {
     chainId: collection.chainId,
     contractAddress: collection.contractAddress,
@@ -659,14 +666,21 @@ async function handleRefreshToken(
     audioOriginalUrl: collection.audioOriginalUrl,
     interactiveOriginalUrl: collection.interactiveOriginalUrl,
     totalSupply: collection.totalSupply,
-    indexedTokenCount:
-      collectionTokenCounts.get(`${collection.chainId}:${collection.contractAddress}`) ?? collection.indexedTokenCount,
+    indexedTokenCount: collection.indexedTokenCount,
     deployBlock: collection.deployBlock,
     lastObservedBlock: collection.lastObservedBlock,
     lastIndexedBlock: collection.lastIndexedBlock,
     syncStatus: collection.syncStatus,
     lastSyncAt: now,
     createdAt: collection.createdAt,
+    updatedAt: now
+  });
+
+  await refreshCollectionMaterializedStats({
+    database: context.database,
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress,
+    standard: collection.standard,
     updatedAt: now
   });
 
@@ -744,16 +758,6 @@ async function removeMissingTokenFromReadModel(params: {
     tokenId: params.existingToken.tokenId
   });
 
-  const collectionTokenCounts = await countTokensForCollections({
-    database: params.context.database,
-    collections: [
-      {
-        chainId: params.collection.chainId,
-        contractAddress: params.collection.contractAddress
-      }
-    ]
-  });
-
   await upsertCollection(params.context.database, {
     chainId: params.collection.chainId,
     contractAddress: params.collection.contractAddress,
@@ -781,14 +785,21 @@ async function removeMissingTokenFromReadModel(params: {
     audioOriginalUrl: params.collection.audioOriginalUrl,
     interactiveOriginalUrl: params.collection.interactiveOriginalUrl,
     totalSupply: params.collection.totalSupply,
-    indexedTokenCount:
-      collectionTokenCounts.get(`${params.collection.chainId}:${params.collection.contractAddress}`) ?? 0,
+    indexedTokenCount: params.collection.indexedTokenCount,
     deployBlock: params.collection.deployBlock,
     lastObservedBlock: params.collection.lastObservedBlock,
     lastIndexedBlock: params.collection.lastIndexedBlock,
     syncStatus: params.collection.syncStatus,
     lastSyncAt: params.updatedAt,
     createdAt: params.collection.createdAt,
+    updatedAt: params.updatedAt
+  });
+
+  await refreshCollectionMaterializedStats({
+    database: params.context.database,
+    chainId: params.collection.chainId,
+    contractAddress: params.collection.contractAddress,
+    standard: params.collection.standard,
     updatedAt: params.updatedAt
   });
 }
@@ -1271,12 +1282,24 @@ async function handleReindexRange(
     updatedAt: now
   });
 
+  // Ownership changed across the reindexed range, so the derived counters are recomputed here
+  // rather than left for the next read to work out.
+  const materializedStats = await refreshCollectionMaterializedStats({
+    database: context.database,
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress,
+    standard: collection.standard,
+    updatedAt: now
+  });
+
   return {
     reindexed: true,
     fromBlock: payload.fromBlock,
     toBlock: payload.toBlock,
     ownerSync: ownerSyncResult,
-    quantitySync: erc1155QuantitySyncResult
+    quantitySync: erc1155QuantitySyncResult,
+    indexedTokenCount: materializedStats.indexedTokenCount,
+    holderCount: materializedStats.holderCount
   };
 }
 
@@ -1657,6 +1680,9 @@ type NormalizedMetadataMediaReference = {
 
 async function resolveMetadata(
   metadataUri: {
+    chainId: number;
+    contractAddress: string;
+    tokenId: string;
     rawUri: string | null;
     resolvedUri: string | null;
   }
@@ -1679,7 +1705,14 @@ async function resolveMetadata(
     return null;
   }
 
-  const responseText = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri));
+  const responseText = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri), {
+    entityType: "token",
+    chainId: metadataUri.chainId,
+    contractAddress: metadataUri.contractAddress,
+    tokenId: metadataUri.tokenId,
+    rawUri: metadataUri.rawUri,
+    resolvedUri: metadataUri.resolvedUri
+  });
   const parsedPayload = JSON.parse(responseText) as Record<string, unknown>;
   const imageReference =
     extractMetadataMediaReference(parsedPayload, [
@@ -1755,6 +1788,8 @@ async function resolveMetadata(
 
 async function resolveCollectionMetadata(
   metadataUri: {
+    chainId: number;
+    contractAddress: string;
     rawUri: string | null;
     resolvedUri: string | null;
   }
@@ -1779,7 +1814,13 @@ async function resolveCollectionMetadata(
     return null;
   }
 
-  const responseText = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri));
+  const responseText = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri), {
+    entityType: "collection",
+    chainId: metadataUri.chainId,
+    contractAddress: metadataUri.contractAddress,
+    rawUri: metadataUri.rawUri,
+    resolvedUri: metadataUri.resolvedUri
+  });
   const parsedPayload = JSON.parse(responseText) as Record<string, unknown>;
   const nestedCollectionPayload = getNestedObjectPropertyCaseInsensitive(parsedPayload, "collection");
   const payloads = nestedCollectionPayload ? [parsedPayload, nestedCollectionPayload] : [parsedPayload];
@@ -1881,19 +1922,38 @@ async function resolveCollectionMetadata(
   };
 }
 
-async function loadMetadataPayloadText(metadataUris: string[]): Promise<string> {
+type MetadataFetchContext = {
+  entityType: "token" | "collection";
+  chainId: number;
+  contractAddress: string;
+  tokenId?: string;
+  rawUri: string | null;
+  resolvedUri: string | null;
+};
+
+type MetadataFetchFailure = {
+  error: Error;
+  durationMs: number;
+  timedOut: boolean;
+  aborted: boolean;
+};
+
+async function loadMetadataPayloadText(metadataUris: string[], context: MetadataFetchContext): Promise<string> {
   if (metadataUris.length === 0) {
     throw new Error("No metadata URI candidates were available.");
   }
 
   let lastError: Error | null = null;
 
-  for (const metadataUri of metadataUris) {
+  for (const [index, metadataUri] of metadataUris.entries()) {
+    const startedAt = Date.now();
+    let timedOut = false;
+
     try {
       if (metadataUri.startsWith("data:")) {
         const inlineMetadata = decodeDataUrlText(metadataUri);
 
-        if (inlineMetadata.length > 1_000_000) {
+        if (inlineMetadata.length > MAX_METADATA_PAYLOAD_BYTES) {
           throw new Error("Metadata payload exceeds the 1 MB safety limit.");
         }
 
@@ -1902,7 +1962,10 @@ async function loadMetadataPayloadText(metadataUris: string[]): Promise<string> 
 
       await assertSafeRemoteUrl(metadataUri);
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error(`Metadata request timed out after ${METADATA_FETCH_TIMEOUT_MS} ms.`));
+      }, METADATA_FETCH_TIMEOUT_MS);
 
       try {
         const response = await fetch(metadataUri, {
@@ -1919,13 +1982,13 @@ async function loadMetadataPayloadText(metadataUris: string[]): Promise<string> 
 
         const contentLengthHeader = response.headers.get("content-length");
 
-        if (contentLengthHeader && Number(contentLengthHeader) > 1_000_000) {
+        if (contentLengthHeader && Number(contentLengthHeader) > MAX_METADATA_PAYLOAD_BYTES) {
           throw new Error("Metadata payload exceeds the 1 MB safety limit.");
         }
 
         const responseText = await response.text();
 
-        if (responseText.length > 1_000_000) {
+        if (responseText.length > MAX_METADATA_PAYLOAD_BYTES) {
           throw new Error("Metadata payload exceeds the 1 MB safety limit.");
         }
 
@@ -1934,11 +1997,111 @@ async function loadMetadataPayloadText(metadataUris: string[]): Promise<string> 
         clearTimeout(timeout);
       }
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      const failure = normalizeMetadataFetchFailure({
+        error,
+        durationMs: Date.now() - startedAt,
+        timedOut
+      });
+
+      logMetadataFetchFailure({
+        context,
+        candidateUrl: metadataUri,
+        candidateIndex: index,
+        candidateCount: metadataUris.length,
+        failure
+      });
+
+      lastError = failure.error;
     }
   }
 
   throw lastError ?? new Error("Metadata payload could not be fetched from any candidate URI.");
+}
+
+function normalizeMetadataFetchFailure(params: {
+  error: unknown;
+  durationMs: number;
+  timedOut: boolean;
+}): MetadataFetchFailure {
+  const baseError = params.error instanceof Error ? params.error : new Error(String(params.error));
+
+  if (params.timedOut) {
+    return {
+      error: new Error(`Metadata request timed out after ${METADATA_FETCH_TIMEOUT_MS} ms.`),
+      durationMs: params.durationMs,
+      timedOut: true,
+      aborted: true
+    };
+  }
+
+  if (isAbortLikeError(baseError)) {
+    return {
+      error: new Error(`Metadata request was aborted after ${params.durationMs} ms.`),
+      durationMs: params.durationMs,
+      timedOut: false,
+      aborted: true
+    };
+  }
+
+  return {
+    error: baseError,
+    durationMs: params.durationMs,
+    timedOut: false,
+    aborted: false
+  };
+}
+
+function isAbortLikeError(error: Error): boolean {
+  return error.name === "AbortError" || /aborted|timeout|timed out/i.test(error.message);
+}
+
+function logMetadataFetchFailure(params: {
+  context: MetadataFetchContext;
+  candidateUrl: string;
+  candidateIndex: number;
+  candidateCount: number;
+  failure: MetadataFetchFailure;
+}): void {
+  console.warn("[worker] metadata fetch failed", {
+    entityType: params.context.entityType,
+    chainId: params.context.chainId,
+    contractAddress: params.context.contractAddress,
+    tokenId: params.context.tokenId,
+    candidateIndex: params.candidateIndex + 1,
+    candidateCount: params.candidateCount,
+    candidateUrl: sanitizeMetadataLogUrl(params.candidateUrl),
+    rawUri: sanitizeMetadataLogUrl(params.context.rawUri),
+    resolvedUri: sanitizeMetadataLogUrl(params.context.resolvedUri),
+    durationMs: params.failure.durationMs,
+    timedOut: params.failure.timedOut,
+    aborted: params.failure.aborted,
+    errorName: params.failure.error.name,
+    errorMessage: params.failure.error.message
+  });
+}
+
+function sanitizeMetadataLogUrl(value: string | null): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.startsWith("data:")) {
+    const header = trimmed.slice(0, trimmed.indexOf(",") > -1 ? trimmed.indexOf(",") : 64);
+    return header.length === trimmed.length ? header : `${header}...`;
+  }
+
+  const normalizedWithoutQuery = trimmed.split(/[?#]/, 1)[0] ?? trimmed;
+
+  try {
+    const url = new URL(normalizedWithoutQuery);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return normalizedWithoutQuery.length <= 240
+      ? normalizedWithoutQuery
+      : `${normalizedWithoutQuery.slice(0, 240)}...`;
+  }
 }
 
 function buildMetadataFetchCandidateUrls(params: {
