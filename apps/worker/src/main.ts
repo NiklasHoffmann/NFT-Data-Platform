@@ -8,7 +8,7 @@ import {
   getMongoDatabase,
   initializePlatformDatabase
 } from "@nft-platform/db";
-import { queueNames } from "@nft-platform/queue";
+import { queueNames, type QueueName } from "@nft-platform/queue";
 import { loadLocalEnvFiles } from "@nft-platform/runtime";
 import { startChainIndexingLoop } from "./chain-indexing";
 import { getWorkerRuntimeConfig } from "./env";
@@ -85,7 +85,11 @@ async function bootstrap(): Promise<void> {
 
           return result;
         },
-        { connection }
+        {
+          connection,
+          concurrency: resolveQueueConcurrency(queueName, config.workerConcurrency),
+          ...buildWorkerRateLimiter(config)
+        }
       )
   );
   const stopMetadataSweepLoop = startMetadataSweepLoop({
@@ -109,7 +113,8 @@ async function bootstrap(): Promise<void> {
       chainIndexingPollIntervalMs: config.chainIndexingPollIntervalMs,
       chainIndexingBatchSize: config.chainIndexingBatchSize,
       chainIndexingMaxBlockRange: config.chainIndexingMaxBlockRange,
-      chainIndexingCollectionAllowlist: config.chainIndexingCollectionAllowlist
+      chainIndexingCollectionAllowlist: config.chainIndexingCollectionAllowlist,
+      chainIndexingConfirmations: config.chainIndexingConfirmations
     }
   });
 
@@ -141,6 +146,16 @@ async function bootstrap(): Promise<void> {
 
   console.log("[worker] runtime online", {
     nodeEnv: config.nodeEnv,
+    concurrency: Object.fromEntries(
+      Object.values(queueNames).map((queueName) => [
+        queueName,
+        resolveQueueConcurrency(queueName, config.workerConcurrency)
+      ])
+    ),
+    rateLimit:
+      config.workerRateLimitMax > 0
+        ? { max: config.workerRateLimitMax, durationMs: config.workerRateLimitDurationMs }
+        : "disabled",
     database: config.mongodbDatabase,
     mediaMaxVideoBytes: config.mediaMaxVideoBytes,
     metadataSweep: {
@@ -160,6 +175,38 @@ async function bootstrap(): Promise<void> {
     },
     queues: Object.values(queueNames)
   });
+}
+
+/**
+ * Refresh work is IO-bound - RPC calls, metadata fetches, media downloads - so running one job at
+ * a time leaves the worker idle waiting on the network.
+ *
+ * `reindex-range` is deliberately excluded. Its jobs rewrite the ownership state of a collection
+ * from a block range, and two ranges of the same collection running at once can interleave those
+ * writes. Serialising the queue is what currently prevents that.
+ */
+function resolveQueueConcurrency(queueName: QueueName, configuredConcurrency: number): number {
+  return queueName === queueNames.reindexRange ? 1 : configuredConcurrency;
+}
+
+/**
+ * Caps how fast a worker pulls jobs, which is the lever for staying inside an RPC provider's rate
+ * limit. Disabled unless a maximum is configured, so the default behaviour is unthrottled.
+ */
+function buildWorkerRateLimiter(config: {
+  workerRateLimitMax: number;
+  workerRateLimitDurationMs: number;
+}): { limiter?: { max: number; duration: number } } {
+  if (config.workerRateLimitMax <= 0) {
+    return {};
+  }
+
+  return {
+    limiter: {
+      max: config.workerRateLimitMax,
+      duration: config.workerRateLimitDurationMs
+    }
+  };
 }
 
 bootstrap().catch((error) => {

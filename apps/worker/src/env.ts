@@ -21,6 +21,10 @@ const workerRuntimeConfigSchema = z.object({
   CHAIN_INDEXING_BATCH_SIZE: z.coerce.number().int().positive().default(10),
   CHAIN_INDEXING_MAX_BLOCK_RANGE: z.coerce.number().int().positive().default(2_000),
   CHAIN_INDEXING_COLLECTION_ALLOWLIST: z.string().default(""),
+  CHAIN_INDEXING_CONFIRMATIONS: z.coerce.number().int().nonnegative().default(12),
+  WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  WORKER_RATE_LIMIT_MAX: z.coerce.number().int().nonnegative().default(0),
+  WORKER_RATE_LIMIT_DURATION_MS: z.coerce.number().int().positive().default(1_000),
   METADATA_SWEEP_ENABLED: z.string().default("false"),
   METADATA_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   METADATA_SWEEP_BATCH_SIZE: z.coerce.number().int().positive().default(25),
@@ -82,6 +86,10 @@ export type WorkerRuntimeConfig = {
     chainId: number;
     contractAddress: string;
   }>;
+  chainIndexingConfirmations: number;
+  workerConcurrency: number;
+  workerRateLimitMax: number;
+  workerRateLimitDurationMs: number;
   metadataSweepEnabled: boolean;
   metadataSweepIntervalMs: number;
   metadataSweepBatchSize: number;
@@ -120,6 +128,10 @@ export function getWorkerRuntimeConfig(): WorkerRuntimeConfig {
     chainIndexingBatchSize: parsed.CHAIN_INDEXING_BATCH_SIZE,
     chainIndexingMaxBlockRange: parsed.CHAIN_INDEXING_MAX_BLOCK_RANGE,
     chainIndexingCollectionAllowlist: parseCollectionAllowlist(parsed.CHAIN_INDEXING_COLLECTION_ALLOWLIST),
+    chainIndexingConfirmations: parsed.CHAIN_INDEXING_CONFIRMATIONS,
+    workerConcurrency: parsed.WORKER_CONCURRENCY,
+    workerRateLimitMax: parsed.WORKER_RATE_LIMIT_MAX,
+    workerRateLimitDurationMs: parsed.WORKER_RATE_LIMIT_DURATION_MS,
     metadataSweepEnabled: parsed.METADATA_SWEEP_ENABLED.trim().toLowerCase() === "true",
     metadataSweepIntervalMs: parsed.METADATA_SWEEP_INTERVAL_MS,
     metadataSweepBatchSize: parsed.METADATA_SWEEP_BATCH_SIZE,
@@ -234,6 +246,7 @@ export type MetadataSweepRuntimeConfig = Pick<
 
 export type ChainIndexingRuntimeConfig = Pick<
   WorkerRuntimeConfig,
+  | "chainIndexingConfirmations"
   | "chainIndexingEnabled"
   | "chainIndexingPollIntervalMs"
   | "chainIndexingBatchSize"
