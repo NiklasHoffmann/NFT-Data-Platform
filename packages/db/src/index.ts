@@ -80,6 +80,14 @@ export type CollectionDocument = {
   interactiveOriginalUrl: string | null;
   totalSupply: string | null;
   indexedTokenCount: number;
+  /**
+   * Distinct owners of the collection, maintained by the worker. Counting holders on read means
+   * grouping every ownership row of the collection per request, which is exactly the work a read
+   * API should not be doing.
+   */
+  holderCount: number;
+  /** Token chosen to represent the collection, maintained alongside `holderCount`. */
+  previewTokenId: ObjectId | null;
   deployBlock: number | null;
   lastObservedBlock: number | null;
   lastIndexedBlock: number | null;
@@ -244,7 +252,28 @@ type IndexModel = {
   name: string;
   unique?: boolean;
   sparse?: boolean;
+  /**
+   * Retention for the index. Applied through `collMod` after index creation rather than through
+   * `createIndexes`, so that an index which already exists without a TTL is converted in place
+   * instead of failing with an index-options conflict.
+   */
+  expireAfterSeconds?: number;
 };
+
+type RetainedIndexModel = IndexModel & { expireAfterSeconds: number };
+
+/**
+ * Audit logs are written once per authenticated API request and are only used for operational
+ * forensics, so they are capped rather than kept forever.
+ */
+const auditLogRetentionSeconds = 30 * 24 * 60 * 60;
+
+/**
+ * The `jobs` collection mirrors BullMQ state, which prunes itself through `removeOnComplete`.
+ * A job document whose `updatedAt` has not moved for this long is terminal: running jobs keep
+ * bumping `updatedAt` on every state transition.
+ */
+const jobRetentionSeconds = 7 * 24 * 60 * 60;
 
 type MongoSchema = Record<string, unknown>;
 
@@ -420,6 +449,8 @@ const collectionDefinitions: Record<MongoCollectionName, CollectionDefinition> =
           interactiveOriginalUrl: nullableField(supportedRemoteOrDataUriField),
           totalSupply: nullableField(nonNegativeIntegerStringField),
           indexedTokenCount: nonNegativeNumberField,
+          holderCount: nonNegativeNumberField,
+          previewTokenId: nullableField(objectIdField),
           deployBlock: nullableField(nonNegativeNumberField),
           lastObservedBlock: nullableField(nonNegativeNumberField),
           lastIndexedBlock: nullableField(nonNegativeNumberField),
@@ -696,7 +727,9 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
   collections: [
     { key: { chainId: 1, contractAddress: 1 }, name: "uniq_chain_contract", unique: true },
     { key: { syncStatus: 1, updatedAt: -1 }, name: "sync_status_updated_at" },
-    { key: { syncStatus: 1, standard: 1, lastSyncAt: 1, updatedAt: 1 }, name: "auto_index_scan" }
+    { key: { syncStatus: 1, standard: 1, lastSyncAt: 1, updatedAt: 1 }, name: "auto_index_scan" },
+    // Collection-level counterpart to the token staleness sweep.
+    { key: { lastCollectionMetadataFetchAt: 1, _id: 1 }, name: "collection_metadata_fetch_age" }
   ],
   tokens: [
     {
@@ -707,6 +740,13 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
     { key: { metadataStatus: 1, updatedAt: -1 }, name: "metadata_status_updated_at" },
     { key: { mediaStatus: 1, updatedAt: -1 }, name: "media_status_updated_at" },
     { key: { updatedAt: -1 }, name: "updated_at_desc" },
+    // Serves "newest tokens of one collection" without a blocking in-memory sort, which is the
+    // access pattern behind collection previews and contract-filtered token listings.
+    { key: { chainId: 1, contractAddress: 1, updatedAt: -1, _id: -1 }, name: "collection_updated_at" },
+    // Drives the staleness sweep: oldest metadata fetch first, with never-fetched tokens (null)
+    // sorting ahead of everything else.
+    { key: { lastMetadataFetchAt: 1, _id: 1 }, name: "metadata_fetch_age" },
+    { key: { metadataStatus: 1, lastMetadataFetchAt: 1 }, name: "metadata_status_fetch_age" },
     { key: { "attributes.trait_type": 1, "attributes.value": 1 }, name: "trait_value_lookup" }
   ],
   erc721_ownership: [
@@ -738,7 +778,8 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
   jobs: [
     { key: { queueJobId: 1 }, name: "uniq_queue_job_id", unique: true, sparse: true },
     { key: { status: 1, createdAt: -1 }, name: "status_created_at" },
-    { key: { type: 1, status: 1, updatedAt: -1 }, name: "type_status_updated_at" }
+    { key: { type: 1, status: 1, updatedAt: -1 }, name: "type_status_updated_at" },
+    { key: { updatedAt: 1 }, name: "updated_at_ttl", expireAfterSeconds: jobRetentionSeconds }
   ],
   api_clients: [
     { key: { clientId: 1 }, name: "uniq_client_id", unique: true },
@@ -747,7 +788,7 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
   ],
   audit_logs: [
     { key: { clientId: 1, timestamp: -1 }, name: "client_timestamp_desc" },
-    { key: { timestamp: -1 }, name: "timestamp_desc" }
+    { key: { timestamp: -1 }, name: "timestamp_desc", expireAfterSeconds: auditLogRetentionSeconds }
   ]
 };
 
@@ -893,9 +934,111 @@ export async function ensureCoreIndexes(database: Db): Promise<void> {
   await Promise.all(
     Object.entries(collectionIndexes).map(async ([collectionName, indexes]) => {
       const collection = database.collection(collectionName);
-      await collection.createIndexes(indexes);
+      const plainIndexes = indexes.filter((index) => index.expireAfterSeconds === undefined);
+      const retainedIndexes = indexes.reduce<RetainedIndexModel[]>((retained, index) => {
+        const { expireAfterSeconds } = index;
+
+        return expireAfterSeconds === undefined
+          ? retained
+          : [...retained, { ...index, expireAfterSeconds }];
+      }, []);
+
+      if (plainIndexes.length > 0) {
+        await collection.createIndexes(plainIndexes);
+      }
+
+      for (const index of retainedIndexes) {
+        await ensureRetainedIndex({ database, collection, collectionName, index });
+      }
     })
   );
+}
+
+/**
+ * Reconciles a single TTL index.
+ *
+ * A TTL cannot simply be declared through `createIndexes`: an index that already exists with a
+ * different retention (including none at all) makes the request fail with an index-options
+ * conflict, and for single-field indexes `{ field: 1 }` and `{ field: -1 }` count as the same
+ * index, so the retention cannot be side-stepped by adding a second one under a new name.
+ * `collMod` is the operation that changes an existing index in place, and it also converts a
+ * non-TTL single-field index into a TTL index.
+ */
+async function ensureRetainedIndex(params: {
+  database: Db;
+  collection: Collection;
+  collectionName: string;
+  index: RetainedIndexModel;
+}): Promise<void> {
+  const existingIndex = await findExistingIndex(params.collection, params.index.name);
+
+  if (!existingIndex) {
+    await params.collection.createIndex(params.index.key, {
+      name: params.index.name,
+      expireAfterSeconds: params.index.expireAfterSeconds
+    });
+    return;
+  }
+
+  if (existingIndex.expireAfterSeconds === params.index.expireAfterSeconds) {
+    return;
+  }
+
+  try {
+    await params.database.command({
+      collMod: params.collectionName,
+      index: {
+        name: params.index.name,
+        expireAfterSeconds: params.index.expireAfterSeconds
+      }
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to apply retention to index "${params.index.name}" on "${params.collectionName}". ` +
+        "Changing the retention of an existing index uses the collMod command, which requires " +
+        "dbAdmin privileges on the database; a readWrite-only user is not sufficient.",
+      { cause: error }
+    );
+  }
+}
+
+async function findExistingIndex(
+  collection: Collection,
+  indexName: string
+): Promise<{ expireAfterSeconds?: number } | null> {
+  try {
+    const existingIndexes = await collection.indexes();
+    return existingIndexes.find((index) => index.name === indexName) ?? null;
+  } catch {
+    // The collection does not exist yet, so neither does the index.
+    return null;
+  }
+}
+
+/**
+ * Gives collections written before the materialized counters existed a defined starting value.
+ *
+ * Without this a pre-existing document reads back as `undefined` for these fields and serves that
+ * straight into an API response. `indexedTokenCount` is included because it has the same gap on
+ * older documents; it used to be masked by the read path recounting tokens on every request, which
+ * the materialized counters removed. The real values arrive the first time the worker refreshes
+ * each collection - this only guarantees the shape.
+ */
+export async function backfillCollectionMaterializedDefaults(database: Db): Promise<number> {
+  const collections = getMongoCollections(database).collections;
+  const defaults: Array<{ field: string; value: number | null }> = [
+    { field: "indexedTokenCount", value: 0 },
+    { field: "holderCount", value: 0 },
+    { field: "previewTokenId", value: null }
+  ];
+
+  const results = await Promise.all(
+    defaults.map((entry) =>
+      collections.updateMany({ [entry.field]: { $exists: false } }, { $set: { [entry.field]: entry.value } })
+    )
+  );
+
+  return results.reduce((total, result) => total + result.modifiedCount, 0);
 }
 
 export async function initializePlatformDatabase(params: {
@@ -904,6 +1047,7 @@ export async function initializePlatformDatabase(params: {
 }): Promise<void> {
   await ensureCoreCollections(params.database);
   await ensureCoreIndexes(params.database);
+  await backfillCollectionMaterializedDefaults(params.database);
 
   if (params.bootstrapApiClient) {
     await ensureBootstrapApiClient(params.database, params.bootstrapApiClient);
@@ -1050,208 +1194,6 @@ export async function findLatestTokenForCollection(params: {
   );
 }
 
-export async function findLatestTokensForCollections(params: {
-  database: Db;
-  collections: Array<{ chainId: number; contractAddress: string }>;
-}): Promise<TokenDocument[]> {
-  if (params.collections.length === 0) {
-    return [];
-  }
-
-  const identities = params.collections.map((collection) => ({
-    chainId: collection.chainId,
-    contractAddress: normalizeContractAddress(collection.contractAddress)
-  }));
-
-  return getMongoCollections(params.database).tokens.aggregate<TokenDocument>([
-    {
-      $match: {
-        $or: identities
-      }
-    },
-    {
-      $addFields: {
-        _previewRank: {
-          $switch: {
-            branches: [
-              {
-                case: {
-                  $or: [
-                    { $ne: ["$imageAssetId", null] },
-                    { $ne: ["$imageOriginalUrl", null] }
-                  ]
-                },
-                then: 0
-              },
-              {
-                case: {
-                  $or: [
-                    { $ne: ["$animationAssetId", null] },
-                    { $ne: ["$animationOriginalUrl", null] }
-                  ]
-                },
-                then: 1
-              },
-              {
-                case: {
-                  $or: [
-                    { $ne: ["$audioAssetId", null] },
-                    { $ne: ["$audioOriginalUrl", null] }
-                  ]
-                },
-                then: 2
-              }
-            ],
-            default: 3
-          }
-        },
-        _mediaStateRank: {
-          $switch: {
-            branches: [
-              {
-                case: { $in: ["$mediaStatus", ["ready", "partial"]] },
-                then: 0
-              },
-              {
-                case: { $eq: ["$mediaStatus", "processing"] },
-                then: 1
-              },
-              {
-                case: { $eq: ["$mediaStatus", "pending"] },
-                then: 2
-              }
-            ],
-            default: 3
-          }
-        }
-      }
-    },
-    {
-      $sort: {
-        _previewRank: 1,
-        _mediaStateRank: 1,
-        updatedAt: -1
-      }
-    },
-    {
-      $group: {
-        _id: {
-          chainId: "$chainId",
-          contractAddress: "$contractAddress"
-        },
-        document: { $first: "$$ROOT" }
-      }
-    },
-    {
-      $replaceRoot: {
-        newRoot: "$document"
-      }
-    }
-  ]).toArray();
-}
-
-export async function countTokensForCollections(params: {
-  database: Db;
-  collections: Array<{ chainId: number; contractAddress: string }>;
-}): Promise<Map<string, number>> {
-  if (params.collections.length === 0) {
-    return new Map();
-  }
-
-  const identities = params.collections.map((collection) => ({
-    chainId: collection.chainId,
-    contractAddress: normalizeContractAddress(collection.contractAddress)
-  }));
-
-  const counts = await getMongoCollections(params.database).tokens.aggregate<{
-    _id: { chainId: number; contractAddress: string };
-    count: number;
-  }>([
-    {
-      $match: {
-        $or: identities
-      }
-    },
-    {
-      $group: {
-        _id: {
-          chainId: "$chainId",
-          contractAddress: "$contractAddress"
-        },
-        count: { $sum: 1 }
-      }
-    }
-  ]).toArray();
-
-  return new Map(
-    counts.map((entry) => [`${entry._id.chainId}:${normalizeContractAddress(entry._id.contractAddress)}`, entry.count])
-  );
-}
-
-export async function countHoldersForCollections(params: {
-  database: Db;
-  collections: Array<{ chainId: number; contractAddress: string }>;
-}): Promise<Map<string, number>> {
-  if (params.collections.length === 0) {
-    return new Map();
-  }
-
-  const identities = params.collections.map((collection) => ({
-    chainId: collection.chainId,
-    contractAddress: normalizeContractAddress(collection.contractAddress)
-  }));
-
-  const [erc721Owners, erc1155Owners] = await Promise.all([
-    getMongoCollections(params.database).erc721Ownership.aggregate<{
-      _id: { chainId: number; contractAddress: string; ownerAddress: string };
-    }>([
-      {
-        $match: {
-          $or: identities
-        }
-      },
-      {
-        $group: {
-          _id: {
-            chainId: "$chainId",
-            contractAddress: "$contractAddress",
-            ownerAddress: "$ownerAddress"
-          }
-        }
-      }
-    ]).toArray(),
-    getMongoCollections(params.database).erc1155Balances.aggregate<{
-      _id: { chainId: number; contractAddress: string; ownerAddress: string };
-    }>([
-      {
-        $match: {
-          $or: identities
-        }
-      },
-      {
-        $group: {
-          _id: {
-            chainId: "$chainId",
-            contractAddress: "$contractAddress",
-            ownerAddress: "$ownerAddress"
-          }
-        }
-      }
-    ]).toArray()
-  ]);
-
-  const holdersByCollection = new Map<string, Set<string>>();
-
-  for (const entry of [...erc721Owners, ...erc1155Owners]) {
-    const key = `${entry._id.chainId}:${normalizeContractAddress(entry._id.contractAddress)}`;
-    const holderSet = holdersByCollection.get(key) ?? new Set<string>();
-    holderSet.add(normalizeWalletAddress(entry._id.ownerAddress));
-    holdersByCollection.set(key, holderSet);
-  }
-
-  return new Map(Array.from(holdersByCollection.entries()).map(([key, holders]) => [key, holders.size]));
-}
-
 export async function findRecentTokensForCollections(params: {
   database: Db;
   collections: Array<{ chainId: number; contractAddress: string }>;
@@ -1262,46 +1204,49 @@ export async function findRecentTokensForCollections(params: {
   }
 
   const limitPerCollection = params.limitPerCollection ?? 6;
-  const identities = params.collections.map((collection) => ({
-    chainId: collection.chainId,
-    contractAddress: normalizeContractAddress(collection.contractAddress)
-  }));
+  const identities = dedupeCollectionIdentities(params.collections);
+  const [firstIdentity, ...remainingIdentities] = identities;
+
+  if (!firstIdentity) {
+    return [];
+  }
+
+  // One bounded branch per collection instead of grouping every token of every collection into a
+  // single array and slicing afterwards. Each branch is served by the `collection_updated_at`
+  // index, so a collection with many tokens no longer pushes the whole set through the
+  // aggregation memory limit.
+  const buildCollectionBranch = (identity: { chainId: number; contractAddress: string }) => [
+    { $match: identity },
+    { $sort: { updatedAt: -1, _id: -1 } },
+    { $limit: limitPerCollection }
+  ];
 
   return getMongoCollections(params.database).tokens.aggregate<TokenDocument>([
-    {
-      $match: {
-        $or: identities
+    ...buildCollectionBranch(firstIdentity),
+    ...remainingIdentities.map((identity) => ({
+      $unionWith: {
+        coll: mongoCollectionNames.tokens,
+        pipeline: buildCollectionBranch(identity)
       }
-    },
-    {
-      $sort: {
-        updatedAt: -1,
-        _id: -1
-      }
-    },
-    {
-      $group: {
-        _id: {
-          chainId: "$chainId",
-          contractAddress: "$contractAddress"
-        },
-        documents: { $push: "$$ROOT" }
-      }
-    },
-    {
-      $project: {
-        documents: { $slice: ["$documents", limitPerCollection] }
-      }
-    },
-    {
-      $unwind: "$documents"
-    },
-    {
-      $replaceRoot: {
-        newRoot: "$documents"
-      }
-    }
+    }))
   ]).toArray();
+}
+
+function dedupeCollectionIdentities(
+  collections: Array<{ chainId: number; contractAddress: string }>
+): Array<{ chainId: number; contractAddress: string }> {
+  return [
+    ...new Map(
+      collections.map((collection) => {
+        const identity = {
+          chainId: collection.chainId,
+          contractAddress: normalizeContractAddress(collection.contractAddress)
+        };
+
+        return [`${identity.chainId}:${identity.contractAddress}`, identity] as const;
+      })
+    ).values()
+  ];
 }
 
 export async function findTokensByIdentities(params: {
@@ -1323,9 +1268,27 @@ export async function findTokensByIdentities(params: {
   }).toArray();
 }
 
+/**
+ * `holderCount` and `previewTokenId` are deliberately not part of the input: they are derived
+ * state owned by `refreshCollectionMaterializedStats`, and letting a general collection upsert
+ * carry them would mean every caller has to recompute them just to write an unrelated field.
+ */
+export async function findTokensByIds(params: {
+  database: Db;
+  tokenIds: ObjectId[];
+}): Promise<TokenDocument[]> {
+  if (params.tokenIds.length === 0) {
+    return [];
+  }
+
+  return getMongoCollections(params.database)
+    .tokens.find({ _id: { $in: params.tokenIds } })
+    .toArray();
+}
+
 export async function upsertCollection(
   database: Db,
-  document: Omit<CollectionDocument, "_id">
+  document: Omit<CollectionDocument, "_id" | "holderCount" | "previewTokenId">
 ): Promise<void> {
   const { createdAt, ...updatableFields } = document;
 
@@ -1341,7 +1304,9 @@ export async function upsertCollection(
         updatedAt: document.updatedAt
       },
       $setOnInsert: {
-        createdAt
+        createdAt,
+        holderCount: 0,
+        previewTokenId: null
       }
     },
     { upsert: true }
@@ -1409,6 +1374,240 @@ export async function listTokens(params: {
     .sort({ updatedAt: -1, _id: -1 })
     .limit(params.limit ?? 100)
     .toArray();
+}
+
+/**
+ * Recomputes the derived collection counters and stores them on the collection document.
+ *
+ * This is worker-side work on purpose. Computing it per request meant grouping every ownership row
+ * and sorting every token of the collection on each read; doing it once per refresh trades a small
+ * amount of staleness for a read that is a single indexed lookup.
+ */
+export async function refreshCollectionMaterializedStats(params: {
+  database: Db;
+  chainId: number;
+  contractAddress: string;
+  standard: NftStandard;
+  updatedAt: Date;
+  previewCandidateScanLimit?: number;
+}): Promise<{ indexedTokenCount: number; holderCount: number; previewTokenId: ObjectId | null }> {
+  const contractAddress = normalizeContractAddress(params.contractAddress);
+  const identity = { chainId: params.chainId, contractAddress };
+
+  const [indexedTokenCount, holderCount, previewTokenId] = await Promise.all([
+    getMongoCollections(params.database).tokens.countDocuments(identity),
+    countDistinctHolders({ database: params.database, identity, standard: params.standard }),
+    resolvePreviewTokenId({
+      database: params.database,
+      identity,
+      scanLimit: params.previewCandidateScanLimit ?? 100
+    })
+  ]);
+
+  await getMongoCollections(params.database).collections.updateOne(identity, {
+    $set: {
+      indexedTokenCount,
+      holderCount,
+      previewTokenId,
+      updatedAt: params.updatedAt
+    }
+  });
+
+  return { indexedTokenCount, holderCount, previewTokenId };
+}
+
+/**
+ * Counts distinct owners inside MongoDB rather than shipping one document per holder to the
+ * application. Ownership lives in a different collection per standard, so only the one matching
+ * the collection's standard is consulted.
+ */
+async function countDistinctHolders(params: {
+  database: Db;
+  identity: { chainId: number; contractAddress: string };
+  standard: NftStandard;
+}): Promise<number> {
+  const collections = getMongoCollections(params.database);
+  const ownershipCollection =
+    params.standard === "erc1155" ? collections.erc1155Balances : collections.erc721Ownership;
+
+  const [result] = await ownershipCollection
+    .aggregate<{ holders: number }>([
+      { $match: params.identity },
+      { $group: { _id: "$ownerAddress" } },
+      { $count: "holders" }
+    ])
+    .toArray();
+
+  return result?.holders ?? 0;
+}
+
+/**
+ * Picks the token that best represents the collection: one with an image, else an animation, else
+ * audio, preferring tokens whose media is already usable.
+ *
+ * The candidate set is capped at the most recently updated tokens instead of ranking the entire
+ * collection, because the ranking keys off field nullability and cannot be served by an index. A
+ * collection whose only illustrated tokens are older than the cap keeps whatever preview it had.
+ */
+async function resolvePreviewTokenId(params: {
+  database: Db;
+  identity: { chainId: number; contractAddress: string };
+  scanLimit: number;
+}): Promise<ObjectId | null> {
+  const candidates = await getMongoCollections(params.database)
+    .tokens.find(params.identity, {
+      projection: {
+        _id: 1,
+        imageAssetId: 1,
+        imageOriginalUrl: 1,
+        animationAssetId: 1,
+        animationOriginalUrl: 1,
+        audioAssetId: 1,
+        audioOriginalUrl: 1,
+        mediaStatus: 1
+      }
+    })
+    .sort({ updatedAt: -1, _id: -1 })
+    .limit(params.scanLimit)
+    .toArray();
+
+  const ranked = candidates
+    .map((candidate) => ({
+      id: candidate._id,
+      mediaRank: resolvePreviewMediaRank(candidate),
+      stateRank: resolvePreviewStateRank(candidate.mediaStatus)
+    }))
+    .filter((candidate) => candidate.mediaRank < 3)
+    .sort((left, right) => left.mediaRank - right.mediaRank || left.stateRank - right.stateRank);
+
+  return ranked[0]?.id ?? null;
+}
+
+function resolvePreviewMediaRank(
+  token: Pick<
+    TokenDocument,
+    | "imageAssetId"
+    | "imageOriginalUrl"
+    | "animationAssetId"
+    | "animationOriginalUrl"
+    | "audioAssetId"
+    | "audioOriginalUrl"
+  >
+): number {
+  if (token.imageAssetId || token.imageOriginalUrl) {
+    return 0;
+  }
+
+  if (token.animationAssetId || token.animationOriginalUrl) {
+    return 1;
+  }
+
+  if (token.audioAssetId || token.audioOriginalUrl) {
+    return 2;
+  }
+
+  return 3;
+}
+
+function resolvePreviewStateRank(mediaStatus: MediaStatus): number {
+  if (mediaStatus === "ready" || mediaStatus === "partial") {
+    return 0;
+  }
+
+  if (mediaStatus === "processing") {
+    return 1;
+  }
+
+  return mediaStatus === "pending" ? 2 : 3;
+}
+
+export type StaleTokenCandidate = Pick<
+  TokenDocument,
+  "chainId" | "contractAddress" | "tokenId" | "metadataStatus" | "lastMetadataFetchAt"
+>;
+
+export type StaleCollectionCandidate = Pick<
+  CollectionDocument,
+  "chainId" | "contractAddress" | "standard" | "lastCollectionMetadataFetchAt"
+>;
+
+/**
+ * Returns the tokens whose materialized metadata is oldest, so that a sweep can refresh them in
+ * bounded batches. Tokens that have never been fetched sort first, because a null
+ * `lastMetadataFetchAt` orders ahead of any date in an ascending index scan.
+ *
+ * Tokens in `failed` state get their own, typically longer, retry window: without that they would
+ * monopolise every batch, since a permanently broken metadata URI never updates its fetch
+ * timestamp past the point where it stops looking stale.
+ */
+export async function listStaleTokensForRefresh(params: {
+  database: Db;
+  staleBefore: Date;
+  failureRetryBefore: Date;
+  limit: number;
+}): Promise<StaleTokenCandidate[]> {
+  const query: Filter<TokenDocument> = {
+    $or: [
+      buildStaleClause({ metadataStatus: { $ne: "failed" } }, "lastMetadataFetchAt", params.staleBefore),
+      buildStaleClause({ metadataStatus: "failed" }, "lastMetadataFetchAt", params.failureRetryBefore)
+    ]
+  };
+
+  return getMongoCollections(params.database)
+    .tokens.find<StaleTokenCandidate>(query, {
+      projection: {
+        _id: 0,
+        chainId: 1,
+        contractAddress: 1,
+        tokenId: 1,
+        metadataStatus: 1,
+        lastMetadataFetchAt: 1
+      }
+    })
+    .sort({ lastMetadataFetchAt: 1, _id: 1 })
+    .limit(params.limit)
+    .toArray();
+}
+
+export async function listStaleCollectionsForRefresh(params: {
+  database: Db;
+  staleBefore: Date;
+  limit: number;
+}): Promise<StaleCollectionCandidate[]> {
+  const query = buildStaleClause({}, "lastCollectionMetadataFetchAt", params.staleBefore) as Filter<CollectionDocument>;
+
+  return getMongoCollections(params.database)
+    .collections.find<StaleCollectionCandidate>(query, {
+      projection: {
+        _id: 0,
+        chainId: 1,
+        contractAddress: 1,
+        standard: 1,
+        lastCollectionMetadataFetchAt: 1
+      }
+    })
+    .sort({ lastCollectionMetadataFetchAt: 1, _id: 1 })
+    .limit(params.limit)
+    .toArray();
+}
+
+/**
+ * A date comparison never matches a null, so "never fetched" has to be spelled out next to
+ * "fetched too long ago" rather than relying on `$lt` alone.
+ */
+function buildStaleClause(
+  statusFilter: Record<string, unknown>,
+  fetchedAtField: string,
+  before: Date
+): Record<string, unknown> {
+  return {
+    $and: [
+      statusFilter,
+      {
+        $or: [{ [fetchedAtField]: null }, { [fetchedAtField]: { $lt: before } }]
+      }
+    ]
+  };
 }
 
 export async function listErc1155Balances(params: {
@@ -2404,7 +2603,6 @@ export function serializeTokenDocument(document: TokenDocument) {
     audioAssetId: serializeObjectId(document.audioAssetId)
   };
 }
-
 
 export function serializeErc721OwnershipDocument(document: Erc721OwnershipDocument) {
   return {

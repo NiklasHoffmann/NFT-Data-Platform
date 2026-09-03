@@ -24,13 +24,13 @@ import {
 import { normalizeWalletAddress, type InteractiveMediaType, type TokenAttribute } from "@nft-platform/domain";
 import {
   type CollectionDocument,
-  countTokensForCollections,
   createMetadataVersion,
   deleteErc721Ownership,
   deleteTokenAndDependents,
   findAllErc1155BalancesForToken,
   findCollectionByIdentity,
   findMediaAssetsByIds,
+  refreshCollectionMaterializedStats,
   listTokens,
   listErc1155Balances,
   findTokenByIdentity,
@@ -244,10 +244,19 @@ async function handleRefreshCollection(
     contractAddress: payload.contractAddress
   });
   const collection = await ensureCollectionRegistration(payload, context, existingCollection);
+  const materializedStats = await refreshCollectionMaterializedStats({
+    database: context.database,
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress,
+    standard: collection.standard,
+    updatedAt: new Date()
+  });
 
   return {
     collectionUpdated: true,
     collectionCreated: !existingCollection,
+    indexedTokenCount: materializedStats.indexedTokenCount,
+    holderCount: materializedStats.holderCount,
     syncStatus: collection.syncStatus,
     standard: collection.standard,
     deployBlock: collection.deployBlock,
@@ -630,16 +639,6 @@ async function handleRefreshToken(
     });
   }
 
-  const collectionTokenCounts = await countTokensForCollections({
-    database: context.database,
-    collections: [
-      {
-        chainId: collection.chainId,
-        contractAddress: collection.contractAddress
-      }
-    ]
-  });
-
   await upsertCollection(context.database, {
     chainId: collection.chainId,
     contractAddress: collection.contractAddress,
@@ -667,14 +666,21 @@ async function handleRefreshToken(
     audioOriginalUrl: collection.audioOriginalUrl,
     interactiveOriginalUrl: collection.interactiveOriginalUrl,
     totalSupply: collection.totalSupply,
-    indexedTokenCount:
-      collectionTokenCounts.get(`${collection.chainId}:${collection.contractAddress}`) ?? collection.indexedTokenCount,
+    indexedTokenCount: collection.indexedTokenCount,
     deployBlock: collection.deployBlock,
     lastObservedBlock: collection.lastObservedBlock,
     lastIndexedBlock: collection.lastIndexedBlock,
     syncStatus: collection.syncStatus,
     lastSyncAt: now,
     createdAt: collection.createdAt,
+    updatedAt: now
+  });
+
+  await refreshCollectionMaterializedStats({
+    database: context.database,
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress,
+    standard: collection.standard,
     updatedAt: now
   });
 
@@ -752,16 +758,6 @@ async function removeMissingTokenFromReadModel(params: {
     tokenId: params.existingToken.tokenId
   });
 
-  const collectionTokenCounts = await countTokensForCollections({
-    database: params.context.database,
-    collections: [
-      {
-        chainId: params.collection.chainId,
-        contractAddress: params.collection.contractAddress
-      }
-    ]
-  });
-
   await upsertCollection(params.context.database, {
     chainId: params.collection.chainId,
     contractAddress: params.collection.contractAddress,
@@ -789,14 +785,21 @@ async function removeMissingTokenFromReadModel(params: {
     audioOriginalUrl: params.collection.audioOriginalUrl,
     interactiveOriginalUrl: params.collection.interactiveOriginalUrl,
     totalSupply: params.collection.totalSupply,
-    indexedTokenCount:
-      collectionTokenCounts.get(`${params.collection.chainId}:${params.collection.contractAddress}`) ?? 0,
+    indexedTokenCount: params.collection.indexedTokenCount,
     deployBlock: params.collection.deployBlock,
     lastObservedBlock: params.collection.lastObservedBlock,
     lastIndexedBlock: params.collection.lastIndexedBlock,
     syncStatus: params.collection.syncStatus,
     lastSyncAt: params.updatedAt,
     createdAt: params.collection.createdAt,
+    updatedAt: params.updatedAt
+  });
+
+  await refreshCollectionMaterializedStats({
+    database: params.context.database,
+    chainId: params.collection.chainId,
+    contractAddress: params.collection.contractAddress,
+    standard: params.collection.standard,
     updatedAt: params.updatedAt
   });
 }
@@ -1279,12 +1282,24 @@ async function handleReindexRange(
     updatedAt: now
   });
 
+  // Ownership changed across the reindexed range, so the derived counters are recomputed here
+  // rather than left for the next read to work out.
+  const materializedStats = await refreshCollectionMaterializedStats({
+    database: context.database,
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress,
+    standard: collection.standard,
+    updatedAt: now
+  });
+
   return {
     reindexed: true,
     fromBlock: payload.fromBlock,
     toBlock: payload.toBlock,
     ownerSync: ownerSyncResult,
-    quantitySync: erc1155QuantitySyncResult
+    quantitySync: erc1155QuantitySyncResult,
+    indexedTokenCount: materializedStats.indexedTokenCount,
+    holderCount: materializedStats.holderCount
   };
 }
 
