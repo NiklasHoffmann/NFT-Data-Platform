@@ -13,6 +13,17 @@ Implementation notes updated on 2026-04-16:
 - signed API requests now combine timestamp freshness with Redis-backed one-time replay protection inside the accepted skew window
 - the public health endpoint is intentionally minimal and no longer exposes runtime environment detail
 
+Implementation notes updated on 2026-09-03:
+- stored metadata now carries a TTL. A token read serves the stored state and queues a refresh behind the response when it has aged out, and the response reports that through a `freshness` block
+- a worker sweep re-queues the oldest tokens and collections in bounded batches, so material that changes after it was first indexed no longer stays stale forever. Tokens in `failed` state use a separate, longer retry window
+- collection counters (`indexedTokenCount`, `holderCount`) and the preview token are materialized by the worker instead of being recomputed on every read
+- chain indexing stops short of the chain head by a configurable confirmation depth, because a reindex job for an already-indexed range is deduplicated by its idempotency key and would never repair a reorg
+- the chain indexing and sweep loops hold Redis locks and read each chain head once per tick, so worker replicas do not multiply RPC cost or race on progress writes
+- refresh queues process jobs in parallel; `reindex-range` stays serial because parallel range jobs on one collection would interleave ownership writes
+- `audit_logs` and `jobs` have retention, applied through `collMod` so an index that already exists without a TTL is converted in place
+- API clients are resolved from a short-lived cache and audit logging no longer blocks the response
+- contract addresses in job payloads are validated and normalized, so one NFT maps to one job regardless of address casing
+
 ## Target stack
 
 - Next.js + React for the read API and operator UI
@@ -115,10 +126,28 @@ Implementation notes updated on 2026-04-16:
 - API-first architecture with asynchronous refresh orchestration
 - Object storage bucket created locally as `nft-media`
 
-## Next milestones after Phase 1
+## Milestones after Phase 1
 
-1. Add MongoDB schemas, indexes, and validators.
-2. Add API key + HMAC request verification backed by `api_clients`.
-3. Add BullMQ queues and processors for refresh and reindex operations.
-4. Add collection registry and chain sync checkpoints.
-5. Add metadata versioning and media ingestion pipelines.
+Delivered:
+
+1. MongoDB schemas, indexes, and validators.
+2. API key + HMAC request verification backed by `api_clients`.
+3. BullMQ queues and processors for refresh and reindex operations.
+4. Collection registry and chain sync checkpoints.
+5. Metadata versioning and media ingestion pipelines.
+6. TTL-driven data freshness: read-path revalidation plus a worker sweep.
+7. Materialized collection counters, so reads do not aggregate over ownership state.
+8. Reorg-safe chain indexing and replica-safe background loops.
+9. Retention on `audit_logs` and `jobs`.
+
+Open:
+
+1. Response caching for read endpoints. HMAC signing plus replay protection makes every request
+   unique, so no CDN or proxy can reuse a response. Either read endpoints move to plain API-key
+   auth so `ETag` and `Cache-Control` can work, or a server-side Redis read cache goes in front of
+   the queries. This is a decision about the consumer auth contract, not just an optimization.
+2. List endpoints still return the full `metadataPayload` per token, which makes large pages heavy.
+   They need a projection and a slimmer list representation.
+3. Search runs on non-indexable regular expressions over `name` and `description`, so it scans the
+   collection. It needs a text index.
+4. The worker job processors have no test coverage.

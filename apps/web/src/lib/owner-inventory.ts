@@ -267,6 +267,13 @@ async function loadWalletCollectionSummaries(database: Db, items: OwnerInventory
   );
 }
 
+/**
+ * A collection document written before an optional field existed simply does not carry that field,
+ * so reading it back yields `undefined` rather than the `null` this type promises - and
+ * `JSON.stringify` drops undefined values, so the key disappears from the response entirely. Every
+ * nullable field is therefore normalized to an explicit `null`, so the JSON shape stays the same
+ * regardless of when the document was written.
+ */
 function buildWalletCollectionSummary(collection: Parameters<typeof serializeCollectionDocument>[0]): WalletCollectionSummary {
   const serializedCollection = serializeCollectionDocument(collection);
 
@@ -275,17 +282,17 @@ function buildWalletCollectionSummary(collection: Parameters<typeof serializeCol
     chainId: serializedCollection.chainId,
     contractAddress: serializedCollection.contractAddress,
     standard: serializedCollection.standard,
-    name: serializedCollection.name,
-    symbol: serializedCollection.symbol,
-    description: serializedCollection.description,
-    externalUrl: serializedCollection.externalUrl,
-    imageOriginalUrl: serializedCollection.imageOriginalUrl,
-    bannerImageOriginalUrl: serializedCollection.bannerImageOriginalUrl,
-    featuredImageOriginalUrl: serializedCollection.featuredImageOriginalUrl,
-    animationOriginalUrl: serializedCollection.animationOriginalUrl,
-    audioOriginalUrl: serializedCollection.audioOriginalUrl,
-    interactiveOriginalUrl: serializedCollection.interactiveOriginalUrl,
-    indexedTokenCount: serializedCollection.indexedTokenCount,
+    name: serializedCollection.name ?? null,
+    symbol: serializedCollection.symbol ?? null,
+    description: serializedCollection.description ?? null,
+    externalUrl: serializedCollection.externalUrl ?? null,
+    imageOriginalUrl: serializedCollection.imageOriginalUrl ?? null,
+    bannerImageOriginalUrl: serializedCollection.bannerImageOriginalUrl ?? null,
+    featuredImageOriginalUrl: serializedCollection.featuredImageOriginalUrl ?? null,
+    animationOriginalUrl: serializedCollection.animationOriginalUrl ?? null,
+    audioOriginalUrl: serializedCollection.audioOriginalUrl ?? null,
+    interactiveOriginalUrl: serializedCollection.interactiveOriginalUrl ?? null,
+    indexedTokenCount: serializedCollection.indexedTokenCount ?? 0,
     syncStatus: serializedCollection.syncStatus,
     updatedAt: serializedCollection.updatedAt
   };

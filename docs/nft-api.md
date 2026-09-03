@@ -12,7 +12,8 @@ That means:
 
 - reads are fast and stable
 - a token can return `404` even if it exists on-chain but has not been indexed yet
-- when data is missing or stale, trigger a refresh job first
+- if a token is missing, trigger a refresh job and read it again afterwards
+- if a token is merely stale, you do not need to do anything: reading it serves the stored state and queues a refresh behind the response. The `freshness` block on the response tells you how old the data is and whether a refresh was queued.
 
 ## Authentication
 
@@ -73,11 +74,12 @@ npm run api:request -- GET "http://localhost:3000/api/v1/tokens/11155111/0xa7c41
 Successful responses return:
 
 - `requestedIdentity`
-- `lookup`
+- `lookup` — `{ "collectionStatus": ..., "tokenStatus": ... }`, each one of `found`, `not_found`, or `not_requested`
 - `collection`
+- `freshness` — how old the stored metadata is, and whether reading it queued a refresh
 - `item`
 
-If the token is not indexed yet, the route returns `404` with lookup metadata that tells you whether the collection is known.
+If the token is not indexed yet, the route returns `404` with the same `lookup` metadata, which tells you whether the collection is known.
 
 ### 2a. Sync external token lists
 
@@ -89,6 +91,7 @@ Behavior:
 
 - already indexed NFTs are returned immediately as `discoveryStatus: ready`
 - missing NFTs are queued as refresh jobs and returned as `discoveryStatus: queued`
+- entries whose contract cannot be validated come back as `discoveryStatus: failed` with a `message`
 
 Example:
 
@@ -101,6 +104,13 @@ npm run api:request -- POST "http://localhost:3000/api/v1/tokens/discover" '{"it
 `GET /api/v1/collections/:chainId/:contractAddress`
 
 Use this to fetch collection metadata and current indexing state.
+
+Besides the stored collection metadata, `item` carries:
+
+- `indexedTokenCount` and `holderCount` — maintained by the worker, not recomputed per request, so they are as current as the last refresh of that collection
+- `previewTokenId` and `preview` — the token chosen to represent the collection, with its media
+- `recentTokens` — the most recently updated tokens of the collection, with thumbnails
+- `coverImageSource` — where the cover image came from: `collection-metadata`, `recent-tokens`, `preview-token`, or `none`
 
 Example:
 
@@ -138,7 +148,7 @@ For wallet or portfolio views, use one of these endpoints:
 
 These responses already embed token and collection summaries, so you usually do not need one extra token request per NFT.
 
-Detailed wallet examples are in [docs/wallet-api.md](docs/wallet-api.md).
+Detailed wallet examples are in [wallet-api.md](wallet-api.md).
 
 ### 6. Sync external wallet holdings
 
@@ -150,6 +160,7 @@ Behavior:
 
 - already indexed NFTs are returned immediately as `discoveryStatus: ready`
 - missing NFTs are queued as refresh jobs and returned as `discoveryStatus: queued`
+- entries whose contract cannot be validated come back as `discoveryStatus: failed` with a `message`
 
 Example:
 
@@ -168,6 +179,9 @@ Pattern:
 3. pass that value back as `?cursor=...`
 4. stop when `pageInfo.hasMore` is `false`
 
+Treat `nextCursor` as an opaque string. It is a base64url-encoded payload and its internal format
+is not part of the API contract.
+
 ## When data is missing
 
 If a token or collection is not present yet, queue a refresh job.
@@ -184,6 +198,18 @@ npm run api:request -- POST "http://localhost:3000/api/v1/refresh/token" '{"chai
 ```
 
 The refresh call only queues work. Read the token again afterwards.
+
+Contract addresses are validated and normalized to lowercase before the job is queued, so the same
+NFT always maps to the same job regardless of the casing you send. A malformed address is rejected
+with `400`:
+
+```json
+{
+  "ok": false,
+  "error": "invalid_refresh_token_request",
+  "issues": [{ "path": "contractAddress", "message": "Expected a valid EVM address." }]
+}
+```
 
 ## Minimal integration flow
 
@@ -208,8 +234,14 @@ Shortened token detail response:
     "tokenId": "4200042"
   },
   "lookup": {
-    "hasCollection": true,
-    "hasToken": true
+    "collectionStatus": "found",
+    "tokenStatus": "found"
+  },
+  "freshness": {
+    "lastMetadataFetchAt": "2026-06-08T19:15:04.126Z",
+    "ageSeconds": 7506458,
+    "isStale": true,
+    "revalidationQueued": true
   },
   "collection": {
     "name": "Example Collection",
