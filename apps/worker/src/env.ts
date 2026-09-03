@@ -21,6 +21,12 @@ const workerRuntimeConfigSchema = z.object({
   CHAIN_INDEXING_BATCH_SIZE: z.coerce.number().int().positive().default(10),
   CHAIN_INDEXING_MAX_BLOCK_RANGE: z.coerce.number().int().positive().default(2_000),
   CHAIN_INDEXING_COLLECTION_ALLOWLIST: z.string().default(""),
+  METADATA_SWEEP_ENABLED: z.string().default("false"),
+  METADATA_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  METADATA_SWEEP_BATCH_SIZE: z.coerce.number().int().positive().default(25),
+  TOKEN_METADATA_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
+  TOKEN_METADATA_FAILURE_RETRY_SECONDS: z.coerce.number().int().positive().default(21_600),
+  COLLECTION_METADATA_TTL_SECONDS: z.coerce.number().int().positive().default(604_800),
   API_CLIENT_SECRET_ENCRYPTION_KEY: z.string().default(""),
   API_BOOTSTRAP_CLIENT_ID: z.string().default(""),
   API_BOOTSTRAP_KEY: z.string().default(""),
@@ -76,6 +82,12 @@ export type WorkerRuntimeConfig = {
     chainId: number;
     contractAddress: string;
   }>;
+  metadataSweepEnabled: boolean;
+  metadataSweepIntervalMs: number;
+  metadataSweepBatchSize: number;
+  tokenMetadataTtlSeconds: number;
+  tokenMetadataFailureRetrySeconds: number;
+  collectionMetadataTtlSeconds: number;
   apiClientSecretEncryptionKey: string;
   bootstrapClientId: string;
   bootstrapApiKey: string;
@@ -108,6 +120,12 @@ export function getWorkerRuntimeConfig(): WorkerRuntimeConfig {
     chainIndexingBatchSize: parsed.CHAIN_INDEXING_BATCH_SIZE,
     chainIndexingMaxBlockRange: parsed.CHAIN_INDEXING_MAX_BLOCK_RANGE,
     chainIndexingCollectionAllowlist: parseCollectionAllowlist(parsed.CHAIN_INDEXING_COLLECTION_ALLOWLIST),
+    metadataSweepEnabled: parsed.METADATA_SWEEP_ENABLED.trim().toLowerCase() === "true",
+    metadataSweepIntervalMs: parsed.METADATA_SWEEP_INTERVAL_MS,
+    metadataSweepBatchSize: parsed.METADATA_SWEEP_BATCH_SIZE,
+    tokenMetadataTtlSeconds: parsed.TOKEN_METADATA_TTL_SECONDS,
+    tokenMetadataFailureRetrySeconds: parsed.TOKEN_METADATA_FAILURE_RETRY_SECONDS,
+    collectionMetadataTtlSeconds: parsed.COLLECTION_METADATA_TTL_SECONDS,
     apiClientSecretEncryptionKey: parsed.API_CLIENT_SECRET_ENCRYPTION_KEY,
     bootstrapClientId: parsed.API_BOOTSTRAP_CLIENT_ID,
     bootstrapApiKey: parsed.API_BOOTSTRAP_KEY,
@@ -203,6 +221,16 @@ function looksLikeValidEncryptionKey(value: string): boolean {
 
   return Buffer.from(trimmed, "base64").length === 32;
 }
+
+export type MetadataSweepRuntimeConfig = Pick<
+  WorkerRuntimeConfig,
+  | "metadataSweepEnabled"
+  | "metadataSweepIntervalMs"
+  | "metadataSweepBatchSize"
+  | "tokenMetadataTtlSeconds"
+  | "tokenMetadataFailureRetrySeconds"
+  | "collectionMetadataTtlSeconds"
+>;
 
 export type ChainIndexingRuntimeConfig = Pick<
   WorkerRuntimeConfig,

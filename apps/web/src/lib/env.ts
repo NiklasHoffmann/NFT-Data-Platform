@@ -49,7 +49,11 @@ const webRuntimeConfigSchema = z.object({
   API_BOOTSTRAP_SCOPES: z.string().default(""),
   API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: optionalPositiveIntWithDefault(300),
   API_BOOTSTRAP_ALLOWED_IPS: z.string().default(""),
-  AUTH_MAX_TIMESTAMP_SKEW_SEC: optionalPositiveIntWithDefault(300)
+  AUTH_MAX_TIMESTAMP_SKEW_SEC: optionalPositiveIntWithDefault(300),
+  TOKEN_METADATA_TTL_SECONDS: optionalPositiveIntWithDefault(86_400),
+  TOKEN_METADATA_FAILURE_RETRY_SECONDS: optionalPositiveIntWithDefault(21_600),
+  READ_REVALIDATION_ENABLED: z.string().default("true"),
+  READ_REVALIDATION_DEBOUNCE_SECONDS: optionalPositiveIntWithDefault(300)
 }).superRefine((value, context) => {
   const hasAnyBootstrapCredential = Boolean(
     value.API_BOOTSTRAP_CLIENT_ID.trim() || value.API_BOOTSTRAP_KEY.trim() || value.API_BOOTSTRAP_SECRET.trim()
@@ -105,6 +109,10 @@ export type WebRuntimeConfig = {
   bootstrapRateLimitPerMinute: number;
   bootstrapAllowedIps: string[];
   authMaxTimestampSkewSec: number;
+  tokenMetadataTtlSeconds: number;
+  tokenMetadataFailureRetrySeconds: number;
+  readRevalidationEnabled: boolean;
+  readRevalidationDebounceSeconds: number;
 };
 
 export function getWebRuntimeConfig(): WebRuntimeConfig {
@@ -132,7 +140,11 @@ export function getWebRuntimeConfig(): WebRuntimeConfig {
     bootstrapScopes: parseScopeList(parsed.API_BOOTSTRAP_SCOPES),
     bootstrapRateLimitPerMinute: parsed.API_BOOTSTRAP_RATE_LIMIT_PER_MINUTE,
     bootstrapAllowedIps: parseCsvList(parsed.API_BOOTSTRAP_ALLOWED_IPS),
-    authMaxTimestampSkewSec: parsed.AUTH_MAX_TIMESTAMP_SKEW_SEC
+    authMaxTimestampSkewSec: parsed.AUTH_MAX_TIMESTAMP_SKEW_SEC,
+    tokenMetadataTtlSeconds: parsed.TOKEN_METADATA_TTL_SECONDS,
+    tokenMetadataFailureRetrySeconds: parsed.TOKEN_METADATA_FAILURE_RETRY_SECONDS,
+    readRevalidationEnabled: parsed.READ_REVALIDATION_ENABLED.trim().toLowerCase() !== "false",
+    readRevalidationDebounceSeconds: parsed.READ_REVALIDATION_DEBOUNCE_SECONDS
   };
 }
 

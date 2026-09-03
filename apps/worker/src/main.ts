@@ -12,6 +12,7 @@ import { queueNames } from "@nft-platform/queue";
 import { loadLocalEnvFiles } from "@nft-platform/runtime";
 import { startChainIndexingLoop } from "./chain-indexing";
 import { getWorkerRuntimeConfig } from "./env";
+import { startMetadataSweepLoop } from "./metadata-sweep";
 import { processQueueJob } from "./jobs/processors";
 
 loadLocalEnvFiles({
@@ -87,6 +88,18 @@ async function bootstrap(): Promise<void> {
         { connection }
       )
   );
+  const stopMetadataSweepLoop = startMetadataSweepLoop({
+    database,
+    redisConnection: connection,
+    config: {
+      metadataSweepEnabled: config.metadataSweepEnabled,
+      metadataSweepIntervalMs: config.metadataSweepIntervalMs,
+      metadataSweepBatchSize: config.metadataSweepBatchSize,
+      tokenMetadataTtlSeconds: config.tokenMetadataTtlSeconds,
+      tokenMetadataFailureRetrySeconds: config.tokenMetadataFailureRetrySeconds,
+      collectionMetadataTtlSeconds: config.collectionMetadataTtlSeconds
+    }
+  });
   const stopChainIndexingLoop = startChainIndexingLoop({
     database,
     redisConnection: connection,
@@ -113,6 +126,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = async (signal: NodeJS.Signals) => {
     console.log(`[worker] shutting down on ${signal}`);
     await stopChainIndexingLoop();
+    await stopMetadataSweepLoop();
     await Promise.all(workers.map((worker) => worker.close()));
     await connection.quit();
     await closeMongoClientSingleton({
@@ -129,6 +143,14 @@ async function bootstrap(): Promise<void> {
     nodeEnv: config.nodeEnv,
     database: config.mongodbDatabase,
     mediaMaxVideoBytes: config.mediaMaxVideoBytes,
+    metadataSweep: {
+      enabled: config.metadataSweepEnabled,
+      intervalMs: config.metadataSweepIntervalMs,
+      batchSize: config.metadataSweepBatchSize,
+      tokenTtlSeconds: config.tokenMetadataTtlSeconds,
+      tokenFailureRetrySeconds: config.tokenMetadataFailureRetrySeconds,
+      collectionTtlSeconds: config.collectionMetadataTtlSeconds
+    },
     chainIndexing: {
       enabled: config.chainIndexingEnabled,
       pollIntervalMs: config.chainIndexingPollIntervalMs,
