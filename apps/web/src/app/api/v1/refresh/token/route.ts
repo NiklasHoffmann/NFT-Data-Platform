@@ -4,6 +4,7 @@ import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
 import { buildApiErrorResponse, buildApiSuccessResponse } from "../../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../../lib/api-validation";
+import { guardCollectionNotDisabled } from "../../../../../lib/collection-status-guard";
 import { guardContractAddress } from "../../../../../lib/contract-address-guard";
 import { enqueueRefreshTokenJob } from "../../../../../lib/queue";
 import { persistQueueBackedJobRecord } from "../../../../../services/jobs/queue-job-service";
@@ -38,6 +39,15 @@ const postHandler = withAuthenticatedRoute(["refresh:token"], async ({ auth }) =
       message: contractGuardResult.message,
       status: 400
     });
+  }
+
+  const disabledGuardResult = await guardCollectionNotDisabled({
+    chainId: validatedPayload.chainId,
+    contractAddress: validatedPayload.contractAddress
+  });
+
+  if (!disabledGuardResult.ok) {
+    return disabledGuardResult.response;
   }
 
   const timestamp = new Date();

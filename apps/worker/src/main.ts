@@ -12,6 +12,7 @@ import { queueNames, type QueueName } from "@nft-platform/queue";
 import { loadLocalEnvFiles } from "@nft-platform/runtime";
 import { startChainIndexingLoop } from "./chain-indexing";
 import { getWorkerRuntimeConfig } from "./env";
+import { startWorkerHeartbeat } from "./heartbeat";
 import { startMetadataSweepLoop } from "./metadata-sweep";
 import { configureMetadataFetchTimeout, processQueueJob } from "./jobs/processors";
 
@@ -122,6 +123,17 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  const stopWorkerHeartbeat = startWorkerHeartbeat({
+    database,
+    config: {
+      chainIndexingEnabled: config.chainIndexingEnabled,
+      chainIndexingPollIntervalMs: config.chainIndexingPollIntervalMs,
+      chainIndexingAllowlistSize: config.chainIndexingCollectionAllowlist.length,
+      metadataSweepEnabled: config.metadataSweepEnabled,
+      metadataSweepIntervalMs: config.metadataSweepIntervalMs
+    }
+  });
+
   workers.forEach((worker) => {
     worker.on("ready", () => {
       console.log(`[worker] ready: ${worker.name}`);
@@ -134,6 +146,7 @@ async function bootstrap(): Promise<void> {
 
   const shutdown = async (signal: NodeJS.Signals) => {
     console.log(`[worker] shutting down on ${signal}`);
+    await stopWorkerHeartbeat();
     await stopChainIndexingLoop();
     await stopMetadataSweepLoop();
     await Promise.all(workers.map((worker) => worker.close()));

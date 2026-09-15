@@ -3,6 +3,7 @@ import { Queue } from "bullmq";
 import type { Db } from "mongodb";
 import type IORedis from "ioredis";
 import {
+  listDisabledCollectionIdentities,
   listStaleCollectionsForRefresh,
   listStaleTokensForRefresh,
   type StaleCollectionCandidate,
@@ -86,17 +87,24 @@ async function sweepOnce(context: {
   }
 
   const now = new Date();
+  // Metadata of a disabled collection never stops aging, so without this exclusion its tokens stay
+  // permanently stale and crowd out the oldest-first batch every single tick.
+  const disabledCollections = await listDisabledCollectionIdentities({
+    database: context.params.database
+  });
   const [staleTokens, staleCollections] = await Promise.all([
     listStaleTokensForRefresh({
       database: context.params.database,
       staleBefore: subtractSeconds(now, context.params.config.tokenMetadataTtlSeconds),
       failureRetryBefore: subtractSeconds(now, context.params.config.tokenMetadataFailureRetrySeconds),
-      limit: context.params.config.metadataSweepBatchSize
+      limit: context.params.config.metadataSweepBatchSize,
+      excludedCollections: disabledCollections
     }),
     listStaleCollectionsForRefresh({
       database: context.params.database,
       staleBefore: subtractSeconds(now, context.params.config.collectionMetadataTtlSeconds),
-      limit: context.params.config.metadataSweepBatchSize
+      limit: context.params.config.metadataSweepBatchSize,
+      excludedCollections: disabledCollections
     })
   ]);
 
