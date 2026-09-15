@@ -15,6 +15,25 @@ That means:
 - if a token is missing, trigger a refresh job and read it again afterwards
 - if a token is merely stale, you do not need to do anything: reading it serves the stored state and queues a refresh behind the response. The `freshness` block on the response tells you how old the data is and whether a refresh was queued.
 
+## What gets indexed
+
+A collection is indexed once it is registered. `POST /api/v1/refresh/collection` creates the
+collection document, resolves its deploy block and sets it to `active` — which is exactly what the
+chain indexing loop looks for. There is no separate approval step: the registration call *is* the
+gate.
+
+Two things are commonly mistaken for that gate and are not:
+
+- **The on-chain whitelist of a marketplace.** This platform knows nothing about it. A collection
+  that is not whitelisted on a marketplace contract is still indexed here if it was registered.
+- **`CHAIN_INDEXING_COLLECTION_ALLOWLIST`.** This worker-side variable is **empty by default, and
+  empty means no filter** — the indexer then picks up every collection that is `active` and has a
+  deploy block. It is a brake for cost emergencies, not an allowlist you have to be added to. Filling
+  it restricts the worker to those collections and requires a redeploy, so it is not the mechanism
+  for day-to-day releases.
+
+To stop indexing a single collection, use the status endpoint below instead.
+
 ## Authentication
 
 All `/api/v1/*` routes require HMAC authentication.
@@ -118,6 +137,46 @@ Example:
 npm run api:request -- GET "http://localhost:3000/api/v1/collections/11155111/0xa7c41cea4f9195eebdc85054e6b0e799035bf02f"
 ```
 
+### 3a. Switch a collection off and back on
+
+`POST /api/v1/collections/:chainId/:contractAddress/status`
+
+Requires the `collections:write` scope. Body:
+
+```json
+{ "syncStatus": "disabled" }
+```
+
+`disabled` stops all background work for that collection: no block scans, no metadata or media
+refreshes, and no read-triggered revalidation. Requests that would queue work for it are rejected
+with `409 collection_disabled`. Reads keep working and keep serving the last indexed state — the
+data does not disappear, it stops moving.
+
+Only `active` and `disabled` can be set. `pending`, `syncing` and `error` are states the worker
+moves through on its own.
+
+**Re-enabling is a catch-up, not a rebuild.** The stored checkpoint survives the shutdown, and the
+indexer resumes at `lastIndexedBlock + 1`. The time it takes to become current again is proportional
+to how long the collection was switched off, not to the size of the collection. Plan for the
+collection to be behind for a while after reactivation rather than current immediately. The response
+carries the checkpoint so you can see the size of the gap:
+
+```json
+{
+  "ok": true,
+  "chainId": 11155111,
+  "contractAddress": "0xa7c41cea4f9195eebdc85054e6b0e799035bf02f",
+  "previousSyncStatus": "disabled",
+  "syncStatus": "active",
+  "deployBlock": 5012443,
+  "lastIndexedBlock": 6180200,
+  "lastObservedBlock": 6349112
+}
+```
+
+The collection has to exist before its status can be changed; register it through
+`POST /api/v1/refresh/collection` first, otherwise the call answers `404`.
+
 ### 4. Search NFTs and collections
 
 `GET /api/v1/search`
@@ -198,6 +257,9 @@ npm run api:request -- POST "http://localhost:3000/api/v1/refresh/token" '{"chai
 ```
 
 The refresh call only queues work. Read the token again afterwards.
+
+If the collection has been switched off, refresh and reindex answer `409 collection_disabled`
+instead of queueing a job that would never run. Re-enable it through the status endpoint first.
 
 Contract addresses are validated and normalized to lowercase before the job is queued, so the same
 NFT always maps to the same job regardless of the casing you send. A malformed address is rejected

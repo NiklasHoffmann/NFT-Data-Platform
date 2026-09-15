@@ -213,6 +213,38 @@ If you turn on `METADATA_SWEEP_ENABLED` for the first time, keep `WORKER_CONCURR
 initial run: everything indexed before the TTL existed looks stale at once, so the sweep will pull
 a full batch every interval until it catches up.
 
+### Decide explicitly whether this instance indexes on its own
+
+`CHAIN_INDEXING_ENABLED` and `METADATA_SWEEP_ENABLED` default to `false`, and this is the single
+most likely reason for a new deployment that "stays empty". Nothing fails: the worker runs, the API
+answers, collections can be registered, and no block is ever scanned. There is no error to find
+because nothing went wrong — the instance is doing exactly what it was configured to do.
+
+Two valid setups, and you have to pick one:
+
+- **Self-indexing.** Set `CHAIN_INDEXING_ENABLED=true` and `METADATA_SWEEP_ENABLED=true`. The worker
+  polls the chain for every registered collection. This is what costs RPC budget, and
+  `CHAIN_INDEXING_COLLECTION_ALLOWLIST` is the brake — note that empty means *no filter*, not
+  *nothing*, so leaving it empty indexes everything that is registered.
+- **Consumer-driven.** Leave both off and have the consuming service push identities through
+  `POST /api/v1/tokens/discover` and the refresh endpoints. Read-path revalidation still keeps what
+  has been read fresh. Nothing is picked up on its own.
+
+After the deploy, `GET /api/health` reports which one you got:
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "background": { "liveWorkerCount": 1, "chainIndexingEnabled": false, "metadataSweepEnabled": false }
+}
+```
+
+`liveWorkerCount: 0` means no worker is reporting at all — refresh jobs are queued but never
+processed. The state is reported, not enforced: it never turns the health verdict red, because
+running consumer-driven with indexing off is a legitimate configuration. The operator UI shows the
+same under **Operations → Background workers**.
+
 ## 6. Database Bootstrap
 
 In production mode, the worker does not auto-bootstrap validators and indexes. Run `npm run db:init`
@@ -235,7 +267,7 @@ $env:API_CLIENT_SECRET_ENCRYPTION_KEY = "<same-value-as-coolify>"
 $env:API_BOOTSTRAP_CLIENT_ID = "<same-value-as-coolify>"
 $env:API_BOOTSTRAP_KEY = "<same-value-as-coolify>"
 $env:API_BOOTSTRAP_SECRET = "<same-value-as-coolify>"
-$env:API_BOOTSTRAP_SCOPES = "collections:read,tokens:read,owners:read,search:read,refresh:token,refresh:collection,refresh:media,reindex:write,admin:read"
+$env:API_BOOTSTRAP_SCOPES = "collections:read,tokens:read,owners:read,search:read,refresh:token,refresh:collection,refresh:media,reindex:write,collections:write,admin:read"
 npm run db:init
 ```
 
@@ -248,6 +280,9 @@ npm run db:init
 5. Read one indexed token and confirm the response carries a `freshness` block.
 6. Confirm no collection document is missing `indexedTokenCount`, `holderCount`, or
    `previewTokenId`, which would mean step 6 was skipped.
+7. Check the `background` block of `GET /api/health` against what you intended. A `liveWorkerCount`
+   of `0`, or indexing switches that are off when you meant them to be on, is the failure mode that
+   produces no error anywhere else.
 
 ## 8. Common Misconfigurations
 
@@ -258,3 +293,8 @@ npm run db:init
 5. `S3_PUBLIC_BASE_URL` not matching your S3 domain + bucket path.
 6. Object store swapped without re-mirroring, leaving `media_assets.cdnUrl*` on the
    previous host and `/api/media` answering `400 unsupported_media_url`.
+7. `CHAIN_INDEXING_ENABLED` left at its `false` default on an instance that is supposed to index by
+   itself. Everything looks healthy and nothing is ever indexed.
+8. `CHAIN_INDEXING_COLLECTION_ALLOWLIST` read as "nothing is indexed until listed". Empty means no
+   filter. To stop a single collection, use
+   `POST /api/v1/collections/:chainId/:contractAddress/status` instead of this variable.
