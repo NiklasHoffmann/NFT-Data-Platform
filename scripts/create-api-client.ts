@@ -23,12 +23,12 @@ const optionsSchema = z
     help: z.boolean().default(false),
     "client-id": z.string().min(1),
     name: z.string().min(1).optional(),
-    scopes: z.string().min(1),
-    "rate-limit": z.coerce.number().int().positive().default(300),
-    "allowed-ips": z.string().default(""),
+    scopes: z.string().min(1).optional(),
+    "rate-limit": z.coerce.number().int().positive().optional(),
+    "allowed-ips": z.string().optional(),
     "api-key": z.string().min(16).optional(),
     "api-secret": z.string().min(16).optional(),
-    status: apiClientStatusSchema.default("active"),
+    status: apiClientStatusSchema.optional(),
     rotate: z.boolean().default(false)
   })
   .strict();
@@ -41,7 +41,7 @@ read back afterwards, so the credentials are printed once and only once.
 
 Required
   --client-id <id>        Stable identifier, also used for rate limiting and audit logs.
-  --scopes <csv>          Comma separated. Valid scopes:
+  --scopes <csv>          Comma separated, required for a new client. Valid scopes:
                           ${scopeSchema.options.join(", ")}
 
 Optional
@@ -54,6 +54,10 @@ Optional
   --rotate                Replace key and secret of an existing client. Without it an
                           existing client id is refused, so a repeated run cannot
                           silently lock out a running consumer.
+
+On a rotation every option left out keeps the value the stored client already
+has, so swapping a secret does not reset scopes, rate limit or IP allowlist.
+Pass an option explicitly to change it in the same run.
 
 Requires API_CLIENT_SECRET_ENCRYPTION_KEY in the environment.
 `.trim();
@@ -155,8 +159,6 @@ async function main(): Promise<void> {
   }
 
   const clientId = options["client-id"];
-  const scopes = parseScopes(options.scopes);
-  const allowedIps = splitCsv(options["allowed-ips"]);
   const apiKey = options["api-key"] ?? generateApiKey();
   const apiSecret = options["api-secret"] ?? generateApiSecret();
   const generated = options["api-key"] === undefined && options["api-secret"] === undefined;
@@ -179,18 +181,36 @@ async function main(): Promise<void> {
       );
     }
 
+    if (!existing && options.scopes === undefined) {
+      throw new Error(
+        `--scopes is required when creating a client. Valid scopes: ${scopeSchema.options.join(", ")}`
+      );
+    }
+
+    // A rotation replaces key and secret. Everything the caller did not name
+    // explicitly is carried over from the stored client, so swapping a secret
+    // cannot quietly strip scopes, widen a rate limit or drop an IP allowlist.
+    const clientName = options.name ?? existing?.clientName ?? clientId;
+    const scopes = options.scopes === undefined ? (existing?.scopes ?? []) : parseScopes(options.scopes);
+    const rateLimitPerMinute = options["rate-limit"] ?? existing?.rateLimitPerMinute ?? 300;
+    const allowedIps =
+      options["allowed-ips"] === undefined
+        ? (existing?.allowedIps ?? [])
+        : splitCsv(options["allowed-ips"]);
+    const status = options.status ?? existing?.status ?? "active";
+
     const timestamp = new Date();
 
     await upsertApiClient(database, {
       clientId,
-      clientName: options.name ?? clientId,
+      clientName,
       keyPrefix: buildApiKeyPrefix(apiKey),
       keyHash: sha256Hex(apiKey),
       secretEncrypted: encryptSecret({ plaintext: apiSecret, encryptionKey }),
       scopes,
-      rateLimitPerMinute: options["rate-limit"],
+      rateLimitPerMinute,
       allowedIps,
-      status: options.status,
+      status,
       // Preserved on rotation so the record still shows when the client was last seen.
       lastUsedAt: existing?.lastUsedAt ?? null,
       createdAt: existing?.createdAt ?? timestamp,
@@ -201,13 +221,13 @@ async function main(): Promise<void> {
     console.log(existing ? "Rotated API client credentials." : "Created API client.");
     console.log("");
     console.log(`  client id     ${clientId}`);
-    console.log(`  name          ${options.name ?? clientId}`);
+    console.log(`  name          ${clientName}`);
     console.log(`  api key       ${apiKey}`);
     console.log(`  api secret    ${apiSecret}`);
     console.log(`  scopes        ${scopes.join(", ")}`);
-    console.log(`  rate limit    ${options["rate-limit"]}/min`);
+    console.log(`  rate limit    ${rateLimitPerMinute}/min`);
     console.log(`  allowed ips   ${allowedIps.length > 0 ? allowedIps.join(", ") : "(no restriction)"}`);
-    console.log(`  status        ${options.status}`);
+    console.log(`  status        ${status}`);
     console.log("");
     console.log(
       generated
