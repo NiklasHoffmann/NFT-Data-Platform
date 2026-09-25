@@ -14,3 +14,6 @@ coverage/
 # Local SSH keys
 /NFT Data Platform
 /NFT Data Platform.pub
+
+# Working notes, not part of the deliverable
+/todo/
