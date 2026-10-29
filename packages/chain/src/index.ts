@@ -214,6 +214,70 @@ export function looksLikeIpfsCid(value: string): boolean {
   return /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(value) || /^b[a-z2-7]{20,}$/i.test(value);
 }
 
+export type IpfsGatewayReference = {
+  namespace: "ipfs" | "ipns";
+  /** Everything after the namespace: the CID or IPNS name plus any sub-path. */
+  path: string;
+  /** Preserved because some gateways rely on it, notably ?filename=. */
+  search: string;
+};
+
+/**
+ * Recognises both gateway URL shapes. Path style keeps the namespace in the path
+ * (https://gw/ipfs/<cid>/file.png). Subdomain style moves it into the host
+ * (https://<cid>.ipfs.gw/file.png), which is what dweb.link redirects to and what
+ * many stored URLs therefore look like. Missing the second shape leaves such a URL
+ * pinned to its original gateway with no way to retry it elsewhere.
+ */
+export function parseIpfsGatewayUrl(value: string): IpfsGatewayReference | null {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  const pathname = url.pathname.replace(/\/+/gu, "/");
+  const pathStyle = /^\/(ipfs|ipns)\/(.+)$/u.exec(pathname);
+
+  if (pathStyle) {
+    const [, namespace = "", path = ""] = pathStyle;
+    return { namespace: namespace as "ipfs" | "ipns", path, search: url.search };
+  }
+
+  const [identifier, namespace] = url.hostname.split(".");
+
+  if (!identifier || (namespace !== "ipfs" && namespace !== "ipns")) {
+    return null;
+  }
+
+  // Hostnames are case-insensitive, so the identifier arrives lowercased. Subdomain
+  // gateways therefore only ever carry base32 CIDv1, which is unaffected.
+  const suffix = pathname === "/" ? "" : pathname;
+  return { namespace, path: `${identifier}${suffix}`, search: url.search };
+}
+
+/**
+ * Every gateway URL a given IPFS gateway URL can be retried as, whichever shape it
+ * arrived in. Empty for anything that does not reference IPFS content.
+ */
+export function buildIpfsRetryUrls(value: string, gatewayHosts?: readonly string[]): string[] {
+  const reference = parseIpfsGatewayUrl(value);
+
+  if (!reference) {
+    return [];
+  }
+
+  const hosts = gatewayHosts && gatewayHosts.length > 0 ? gatewayHosts : resolveIpfsGatewayHosts();
+
+  return [
+    ...new Set(
+      hosts.map((host) => `https://${host}/${reference.namespace}/${reference.path}${reference.search}`)
+    )
+  ];
+}
+
 export function createChainPublicClient(params: {
   chainId: number;
   rpcUrl: string;
