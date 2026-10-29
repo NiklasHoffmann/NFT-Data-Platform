@@ -1511,6 +1511,7 @@ function renderCollectionTokenCard(params: {
   const tokenHref = buildIndexedTokenHref(collectionToken.token);
   const tokenLabel = collectionToken.name ?? `Token ${collectionToken.tokenId}`;
   const tokenCardKey = `${collectionToken.token.chainId}:${collectionToken.token.contractAddress}:${collectionToken.token.tokenId}`;
+  const mediaFailureReason = findMediaFailureReason(collectionToken.mediaAssets);
 
   return (
     <div key={tokenCardKey} className="asset-card collection-token-card">
@@ -1550,6 +1551,12 @@ function renderCollectionTokenCard(params: {
           <dt>Media status</dt>
           <dd>{collectionToken.mediaStatus}</dd>
         </div>
+        {mediaFailureReason ? (
+          <div>
+            <dt>Grund</dt>
+            <dd className="collection-token-card__failure-reason">{mediaFailureReason}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Updated</dt>
           <dd>{formatDateValue(collectionToken.updatedAt)}</dd>
@@ -1571,6 +1578,23 @@ function renderCollectionTokenCard(params: {
       </div>
     </div>
   );
+}
+
+/**
+ * The worker records why a media asset did not make it -- over the size limit, the
+ * fetch aborted, the source answered 404. Surfacing it on the card turns "FAILED"
+ * into something actionable without opening the token or reading worker logs.
+ */
+function findMediaFailureReason(
+  mediaAssets: Array<ReturnType<typeof serializeMediaAssetDocument>>
+): string | null {
+  for (const mediaAsset of mediaAssets) {
+    if (mediaAsset.status !== "ready" && mediaAsset.statusDetail?.trim()) {
+      return mediaAsset.statusDetail.trim();
+    }
+  }
+
+  return null;
 }
 
 function buildIndexedTokenHref(

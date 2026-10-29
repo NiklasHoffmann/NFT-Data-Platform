@@ -1917,3 +1917,12 @@ ul {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* The worker's failure detail is a full sentence, so it needs to wrap rather than
+   stretch the card. */
+.collection-token-card__failure-reason {
+  color: var(--accent-warm);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}

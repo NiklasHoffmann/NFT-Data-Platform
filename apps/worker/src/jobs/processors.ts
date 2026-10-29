@@ -72,6 +72,8 @@ type JobProcessingContext = {
   rpcUrls: Record<number, string>;
   storage: StorageConfig;
   mediaMaxVideoBytes: number;
+  mediaMaxImageBytes: number;
+  mediaFetchTimeoutMs: number;
 };
 
 const METADATA_FETCH_TIMEOUT_MS = 10_000;
@@ -225,17 +227,57 @@ function serializeMongoErrInfo(errInfo: unknown): string | null {
   }
 }
 
-function toNonEmptyErrorMessage(value: unknown, fallback: string): string {
-  if (value instanceof Error) {
-    const trimmedMessage = value.message.trim();
+export function toNonEmptyErrorMessage(value: unknown, fallback: string): string {
+  return describeErrorChain(value, 0) || fallback;
+}
 
-    if (trimmedMessage) {
-      return trimmedMessage;
+/**
+ * Flattens an error and whatever it wraps into one readable line.
+ *
+ * fetch throws "TypeError: fetch failed" whose real reason lives in cause, and a
+ * connection attempt across several addresses throws an AggregateError whose own
+ * message is empty. Reading only error.message turned both into the useless string
+ * "AggregateError" -- which was not just unhelpful in the stored statusDetail but
+ * also broke retry classification, since that matches on the message text and so
+ * treated transient network failures as terminal.
+ */
+function describeErrorChain(value: unknown, depth: number): string {
+  if (depth > 3) {
+    return "";
+  }
+
+  if (value instanceof AggregateError && value.errors.length > 0) {
+    const inner = [
+      ...new Set(
+        value.errors
+          .map((nested) => describeErrorChain(nested, depth + 1))
+          .filter((entry) => entry.length > 0)
+      )
+    ];
+
+    if (inner.length > 0) {
+      return inner.join("; ");
     }
   }
 
-  const normalized = String(value ?? "").trim();
-  return normalized || fallback;
+  if (value instanceof Error) {
+    const parts = [value.message.trim() || value.name];
+    const code = (value as { code?: unknown }).code;
+
+    if (typeof code === "string" && !parts[0]?.includes(code)) {
+      parts.push(code);
+    }
+
+    const cause = describeErrorChain(value.cause, depth + 1);
+
+    if (cause && !parts.some((part) => part.includes(cause))) {
+      parts.push(cause);
+    }
+
+    return parts.join(": ");
+  }
+
+  return String(value ?? "").trim();
 }
 
 async function handleRefreshCollection(
@@ -1002,7 +1044,9 @@ async function handleRefreshMedia(
       const downloadedMedia = await loadMediaSource({
         sourceUrl: normalizedSourceUrl,
         kind: mediaSource.kind,
-        mediaMaxVideoBytes: context.mediaMaxVideoBytes
+        mediaMaxVideoBytes: context.mediaMaxVideoBytes,
+        mediaMaxImageBytes: context.mediaMaxImageBytes,
+        mediaFetchTimeoutMs: context.mediaFetchTimeoutMs
       });
       const checksumSha256 = createHash("sha256").update(downloadedMedia.bytes).digest("hex");
       const objectKeys = buildMediaObjectKeys({
@@ -2719,6 +2763,8 @@ async function loadMediaSource(params: {
   sourceUrl: string;
   kind: "image" | "animation" | "audio";
   mediaMaxVideoBytes: number;
+  mediaMaxImageBytes: number;
+  mediaFetchTimeoutMs: number;
 }): Promise<{
   bytes: Uint8Array;
   mimeType: string | null;
@@ -2731,7 +2777,9 @@ async function loadMediaSource(params: {
   const remoteMedia = await downloadRemoteMedia({
     sourceUrl: params.sourceUrl,
     kind: params.kind,
-    mediaMaxVideoBytes: params.mediaMaxVideoBytes
+    mediaMaxVideoBytes: params.mediaMaxVideoBytes,
+    mediaMaxImageBytes: params.mediaMaxImageBytes,
+    mediaFetchTimeoutMs: params.mediaFetchTimeoutMs
   });
 
   return {
@@ -2744,13 +2792,19 @@ async function downloadRemoteMedia(params: {
   sourceUrl: string;
   kind: "image" | "animation" | "audio";
   mediaMaxVideoBytes: number;
+  mediaMaxImageBytes: number;
+  mediaFetchTimeoutMs: number;
 }): Promise<{
   bytes: Uint8Array;
   mimeType: string | null;
   sizeBytes: number;
 }> {
   await assertSafeRemoteUrl(params.sourceUrl);
-  const byteLimit = getMediaByteLimit({ kind: params.kind, mediaMaxVideoBytes: params.mediaMaxVideoBytes });
+  const byteLimit = getMediaByteLimit({
+    kind: params.kind,
+    mediaMaxVideoBytes: params.mediaMaxVideoBytes,
+    mediaMaxImageBytes: params.mediaMaxImageBytes
+  });
   const candidateUrls = buildMediaFetchCandidateUrls(params.sourceUrl);
   const failures: Array<{ message: string; retryable: boolean }> = [];
 
@@ -2758,7 +2812,8 @@ async function downloadRemoteMedia(params: {
     try {
       return await fetchRemoteMediaCandidate({
         candidateUrl,
-        byteLimit
+        byteLimit,
+        timeoutMs: params.mediaFetchTimeoutMs
       });
     } catch (error) {
       failures.push(
@@ -2783,13 +2838,14 @@ async function downloadRemoteMedia(params: {
 async function fetchRemoteMediaCandidate(params: {
   candidateUrl: string;
   byteLimit: number;
+  timeoutMs: number;
 }): Promise<{
   bytes: Uint8Array;
   mimeType: string | null;
   sizeBytes: number;
 }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
 
   try {
     const response = await fetch(params.candidateUrl, {
@@ -2830,8 +2886,11 @@ async function fetchRemoteMediaCandidate(params: {
 function getMediaByteLimit(params: {
   kind: "image" | "animation" | "audio";
   mediaMaxVideoBytes: number;
+  mediaMaxImageBytes: number;
 }): number {
-  return params.kind === "animation" ? params.mediaMaxVideoBytes : 25_000_000;
+  // Images and audio share one budget; animation gets its own because a video is
+  // expected to be larger and is capped separately by the operator.
+  return params.kind === "animation" ? params.mediaMaxVideoBytes : params.mediaMaxImageBytes;
 }
 
 function formatByteLimit(value: number): string {
@@ -2889,12 +2948,14 @@ function classifyMediaProcessingFailure(params: {
   };
 }
 
-function isRetryableMediaFailure(params: { error: unknown; sourceUrl: string }): boolean {
+export function isRetryableMediaFailure(params: { error: unknown; sourceUrl: string }): boolean {
   if (params.error instanceof RetryableQueueError) {
     return true;
   }
 
-  const message = params.error instanceof Error ? params.error.message : String(params.error ?? "");
+  // Uses the flattened chain, not error.message: a wrapped fetch failure carries its
+  // reason in cause, and matching the bare message marked those as terminal.
+  const message = toNonEmptyErrorMessage(params.error, "");
   const isIpfsLikeSource = isIpfsLikeMediaUrl(params.sourceUrl);
   const statusMatch = message.match(/status\s+(\d{3})/i);
   const statusCode = statusMatch ? Number(statusMatch[1]) : null;
@@ -2915,7 +2976,13 @@ function isRetryableMediaFailure(params: { error: unknown; sourceUrl: string }):
     return false;
   }
 
-  return /aborted|timeout|timed out|fetch failed|network|econnreset|socket|temporar/i.test(message);
+  // ETIMEDOUT and ECONNREFUSED are spelled without a separator and so are not covered
+  // by "timeout". They only became visible once the error chain was unwrapped, and a
+  // gateway refusing or dropping a connection is worth another attempt. ENOTFOUND is
+  // left out on purpose: a hostname that does not resolve will not resolve on a retry.
+  return /aborted|timeout|timed out|etimedout|econnrefused|fetch failed|network|econnreset|socket|temporar/i.test(
+    message
+  );
 }
 
 function classifyRemoteMediaFetchFailure(params: {
