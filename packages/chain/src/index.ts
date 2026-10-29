@@ -1,3 +1,4 @@
+import process from "node:process";
 import {
   normalizeContractAddress,
   normalizeWalletAddress,
@@ -97,27 +98,67 @@ export function expandErc1155UriTemplate(template: string, tokenId: string): str
   return template.replace(/\{id\}/gi, paddedTokenId);
 }
 
-export function normalizeAssetUri(uri: string): string {
+/**
+ * Public IPFS gateways, in the order they are tried. The previously hardcoded
+ * ipfs.io and dweb.link are deliberately absent: both now answer server-side
+ * requests with "This IPFS gateway is switching to a service worker gateway only",
+ * and cloudflare-ipfs.com was discontinued and no longer accepts connections.
+ *
+ * Open gateways throttle, so a deployment with real volume should point
+ * IPFS_GATEWAY_URLS at its own dedicated gateway and keep these as the fallback.
+ */
+export const defaultIpfsGatewayHosts = ["gateway.pinata.cloud", "ipfs.filebase.io"] as const;
+
+/**
+ * Identifies this client to gateways. Without it Node sends "User-Agent: node",
+ * which bot protection in front of several gateways treats as a crawler.
+ */
+export const assetFetchUserAgent = "nft-data-platform/0.1 (+https://github.com/NiklasHoffmann/NFT-Data-Platform)";
+
+let memoizedGatewayHosts: string[] | null = null;
+
+/**
+ * Gateway hosts from IPFS_GATEWAY_URLS, falling back to the public defaults.
+ * Accepts bare hosts or full origins, comma separated. Memoized, because the value
+ * cannot change without a restart.
+ */
+export function resolveIpfsGatewayHosts(): string[] {
+  if (memoizedGatewayHosts) {
+    return memoizedGatewayHosts;
+  }
+
+  memoizedGatewayHosts = parseIpfsGatewayHosts(process.env.IPFS_GATEWAY_URLS);
+  return memoizedGatewayHosts;
+}
+
+export function parseIpfsGatewayHosts(rawValue: string | undefined): string[] {
+  const configuredHosts = (rawValue ?? "")
+    .split(",")
+    .map((entry) => normalizeGatewayHost(entry))
+    .filter((host): host is string => Boolean(host));
+
+  return configuredHosts.length > 0 ? [...new Set(configuredHosts)] : [...defaultIpfsGatewayHosts];
+}
+
+function normalizeGatewayHost(value: string): string | null {
+  const trimmed = value.trim().replace(/\/+$/u, "");
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    // Tolerates both "example.com" and "https://example.com/" in configuration.
+    return new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`).host;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeAssetUri(uri: string, options?: { gatewayHosts?: readonly string[] }): string {
   if (uri.startsWith("ipfs://")) {
-    const remainder = uri.slice("ipfs://".length).replace(/^\/+/, "");
-
-    if (!remainder) {
-      return uri;
-    }
-
-    if (remainder.startsWith("ipfs/")) {
-      return `https://ipfs.io/${remainder}`;
-    }
-
-    if (remainder.startsWith("ipns/")) {
-      return `https://dweb.link/${remainder}`;
-    }
-
-    const [namespace = "", ...pathSegments] = remainder.split("/");
-    const normalizedPath = pathSegments.join("/");
-    const route = looksLikeIpfsCid(namespace) ? "ipfs" : "ipns";
-
-    return `https://dweb.link/${route}/${namespace}${normalizedPath ? `/${normalizedPath}` : ""}`;
+    const [gatewayUrl] = buildIpfsGatewayUrls(uri, options?.gatewayHosts);
+    return gatewayUrl ?? uri;
   }
 
   if (uri.startsWith("ar://")) {
@@ -127,7 +168,49 @@ export function normalizeAssetUri(uri: string): string {
   return uri;
 }
 
-function looksLikeIpfsCid(value: string): boolean {
+/**
+ * Every gateway URL an ipfs:// or ipns:// URI can be fetched from, one per
+ * configured host. Returns an empty array for anything that is not an IPFS URI, so
+ * callers can concatenate without branching.
+ */
+export function buildIpfsGatewayUrls(uri: string, gatewayHosts?: readonly string[]): string[] {
+  if (!uri.startsWith("ipfs://")) {
+    return [];
+  }
+
+  const remainder = uri.slice("ipfs://".length).replace(/^\/+/u, "");
+
+  if (!remainder) {
+    return [];
+  }
+
+  const hosts = gatewayHosts && gatewayHosts.length > 0 ? gatewayHosts : resolveIpfsGatewayHosts();
+  const paths = buildIpfsGatewayPaths(remainder);
+
+  // Host-major order: try every path on one gateway before moving to the next, so a
+  // single reachable gateway resolves the URI without touching the others.
+  return [...new Set(hosts.flatMap((host) => paths.map((path) => `https://${host}/${path}`)))];
+}
+
+function buildIpfsGatewayPaths(remainder: string): string[] {
+  if (remainder.startsWith("ipfs/") || remainder.startsWith("ipns/")) {
+    return [remainder];
+  }
+
+  const [namespace = "", ...pathSegments] = remainder.split("/");
+  const normalizedPath = pathSegments.join("/");
+  const suffix = normalizedPath ? `/${normalizedPath}` : "";
+
+  if (looksLikeIpfsCid(namespace)) {
+    return [`ipfs/${namespace}${suffix}`];
+  }
+
+  // Not recognisably a CID: most likely IPNS, but some contracts store a bare CID in
+  // a format this check does not cover, so both routes are tried.
+  return [`ipns/${namespace}${suffix}`, `ipfs/${namespace}${suffix}`];
+}
+
+export function looksLikeIpfsCid(value: string): boolean {
   return /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(value) || /^b[a-z2-7]{20,}$/i.test(value);
 }
 

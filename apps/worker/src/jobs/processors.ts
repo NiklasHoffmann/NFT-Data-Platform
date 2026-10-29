@@ -7,6 +7,8 @@ import type { Db, ObjectId } from "mongodb";
 import {
   detectNftStandard,
   findContractDeploymentBlock,
+  assetFetchUserAgent,
+  buildIpfsGatewayUrls,
   getChainPublicClient,
   getRpcUrlForChain,
   hasErc1155TokenTransferActivity,
@@ -14,6 +16,7 @@ import {
   isSupportedChainId,
   normalizeAssetUri,
   readCollectionSignalsOnChain,
+  resolveIpfsGatewayHosts,
   readErc721TransfersInRange,
   readErc1155TokenExists,
   readErc1155TransfersForTokenInRange,
@@ -1972,7 +1975,8 @@ async function loadMetadataPayloadText(metadataUris: string[], context: Metadata
           redirect: "follow",
           signal: controller.signal,
           headers: {
-            accept: "application/json,text/plain;q=0.9,*/*;q=0.1"
+            accept: "application/json,text/plain;q=0.9,*/*;q=0.1",
+            "user-agent": assetFetchUserAgent
           }
         });
 
@@ -2129,41 +2133,7 @@ function expandMetadataFetchCandidatesFromRawUri(rawUri: string): string[] {
     return [];
   }
 
-  const remainder = rawUri.slice("ipfs://".length).replace(/^\/+/, "");
-
-  if (!remainder) {
-    return [];
-  }
-
-  if (remainder.startsWith("ipfs/")) {
-    return [`https://dweb.link/${remainder}`, `https://ipfs.io/${remainder}`];
-  }
-
-  if (remainder.startsWith("ipns/")) {
-    return [`https://dweb.link/${remainder}`, `https://ipfs.io/${remainder}`];
-  }
-
-  const [namespace = "", ...pathSegments] = remainder.split("/");
-  const normalizedPath = pathSegments.join("/");
-  const suffix = normalizedPath ? `/${normalizedPath}` : "";
-
-  if (looksLikeIpfsCid(namespace)) {
-    return [
-      `https://dweb.link/ipfs/${namespace}${suffix}`,
-      `https://ipfs.io/ipfs/${namespace}${suffix}`
-    ];
-  }
-
-  return [
-    `https://dweb.link/ipns/${namespace}${suffix}`,
-    `https://ipfs.io/ipns/${namespace}${suffix}`,
-    `https://dweb.link/ipfs/${namespace}${suffix}`,
-    `https://ipfs.io/ipfs/${namespace}${suffix}`
-  ];
-}
-
-function looksLikeIpfsCid(value: string): boolean {
-  return /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(value) || /^b[a-z2-7]{20,}$/i.test(value);
+  return buildIpfsGatewayUrls(rawUri);
 }
 
 async function assertSafeRemoteUrl(candidate: string): Promise<void> {
@@ -2819,7 +2789,8 @@ async function fetchRemoteMediaCandidate(params: {
       redirect: "follow",
       signal: controller.signal,
       headers: {
-        accept: "image/*,video/*,audio/*,application/octet-stream;q=0.9,*/*;q=0.1"
+        accept: "image/*,video/*,audio/*,application/octet-stream;q=0.9,*/*;q=0.1",
+        "user-agent": assetFetchUserAgent
       }
     });
 
@@ -2970,9 +2941,9 @@ function buildMediaFetchCandidateUrls(sourceUrl: string): string[] {
       return candidates;
     }
 
-    const candidateHosts = [url.host, "dweb.link", "ipfs.io", "cloudflare-ipfs.com"];
-
-    for (const host of candidateHosts) {
+    // The source URL already names a gateway; retry the same path on the configured
+    // ones, which is what rescues media whose original gateway is gone.
+    for (const host of resolveIpfsGatewayHosts()) {
       const candidate = new URL(sourceUrl);
       candidate.host = host;
       candidate.protocol = "https:";
