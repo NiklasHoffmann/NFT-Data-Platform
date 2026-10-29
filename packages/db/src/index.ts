@@ -3,6 +3,7 @@ import {
   ObjectId,
   type Collection,
   type Db,
+  type Document,
   type Filter,
   type MongoClientOptions,
   type OptionalUnlessRequiredId
@@ -2104,6 +2105,86 @@ export async function findMediaAssetsByIds(params: {
   return getMongoCollections(params.database).mediaAssets.find({
     _id: { $in: uniqueAssetIds }
   }).toArray();
+}
+
+export type TokenMediaMirrorIdentity = {
+  chainId: number;
+  contractAddress: string;
+  tokenId: string;
+};
+
+/**
+ * Tokens that carry at least one media source but have no media asset mirrored into
+ * the given public base URL. Covers both halves of a store migration in one
+ * predicate: assets still pointing at a previous host, and tokens that were never
+ * mirrored at all. Because the predicate shrinks as work completes, the same query
+ * backs both the counter and the batches, and repeated runs converge instead of
+ * redoing finished work.
+ */
+export async function countTokensPendingMediaMirror(params: {
+  database: Db;
+  currentPublicBaseUrl: string;
+}): Promise<number> {
+  const [result] = await getMongoCollections(params.database)
+    .tokens.aggregate<{ total: number }>([
+      ...buildPendingMediaMirrorStages(params.currentPublicBaseUrl),
+      { $count: "total" }
+    ])
+    .toArray();
+
+  return result?.total ?? 0;
+}
+
+export async function listTokenIdentitiesPendingMediaMirror(params: {
+  database: Db;
+  currentPublicBaseUrl: string;
+  limit: number;
+}): Promise<TokenMediaMirrorIdentity[]> {
+  return getMongoCollections(params.database)
+    .tokens.aggregate<TokenMediaMirrorIdentity>([
+      ...buildPendingMediaMirrorStages(params.currentPublicBaseUrl),
+      { $sort: { _id: 1 } },
+      { $limit: params.limit },
+      { $project: { _id: 0, chainId: 1, contractAddress: 1, tokenId: 1 } }
+    ])
+    .toArray();
+}
+
+function buildPendingMediaMirrorStages(currentPublicBaseUrl: string): Document[] {
+  const normalizedBaseUrl = currentPublicBaseUrl.endsWith("/")
+    ? currentPublicBaseUrl.slice(0, -1)
+    : currentPublicBaseUrl;
+
+  return [
+    {
+      $match: {
+        $or: [
+          { imageOriginalUrl: { $type: "string" } },
+          { animationOriginalUrl: { $type: "string" } },
+          { audioOriginalUrl: { $type: "string" } }
+        ]
+      }
+    },
+    {
+      // The tokenRef prefix of the unique token_kind_lookup index serves this join.
+      $lookup: {
+        from: mongoCollectionNames.mediaAssets,
+        let: { tokenObjectId: "$_id" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$tokenRef", "$$tokenObjectId"] } } },
+          { $match: { cdnUrlOriginal: { $regex: `^${escapeRegExpLiteral(normalizedBaseUrl)}` } } },
+          { $limit: 1 },
+          { $project: { _id: 1 } }
+        ],
+        as: "mirroredOnCurrentStore"
+      }
+    },
+    { $match: { mirroredOnCurrentStore: { $size: 0 } } }
+  ];
+}
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 export async function upsertErc721Ownership(

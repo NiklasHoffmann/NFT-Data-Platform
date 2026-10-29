@@ -27,6 +27,7 @@ import { DiscoverLiveRefresh } from "./discover-live-refresh";
 import { DiscoverSubmitButton } from "./discover-submit-button";
 import { InteractiveMediaPreviewGallery, type MediaGalleryItem, type MediaActionLink } from "./media-preview-gallery";
 import { ProgressiveCardGrid } from "./progressive-card-grid";
+import { mediaMirrorBatchSize } from "./remirror-flow";
 
 const tokenScopedJobTypes = ["refresh-token", "refresh-media"] as const;
 const collectionScopedJobTypes = ["refresh-collection", "reindex-range"] as const;
@@ -67,7 +68,8 @@ const emptyOperationsHealth: OperationsHealthSnapshot = {
     activeJobsCount: 0,
     retryingMediaJobsCount: 0,
     failedJobsCount: 0,
-    laggingCollectionsCount: 0
+    laggingCollectionsCount: 0,
+    pendingMediaMirrorCount: 0
   },
   activeJobs: [],
   retryingMediaJobs: [],
@@ -104,7 +106,9 @@ export default async function HomePage(props: {
 
   if (database && shouldLoadOperationsHealth) {
     try {
-      operationsHealth = await loadOperationsHealth(database);
+      operationsHealth = await loadOperationsHealth(database, {
+        currentMediaPublicBaseUrl: webRuntimeConfig.mediaPublicBaseUrl
+      });
     } catch {
       operationsHealthWarning = "Operations telemetry is temporarily unavailable while MongoDB or Redis finishes starting up.";
     }
@@ -1185,7 +1189,41 @@ export default async function HomePage(props: {
                 <span className="meta-label">Lagging ERC-1155 collections</span>
                 <strong>{operationsHealth.summary.laggingCollectionsCount}</strong>
               </div>
+              <div>
+                <span className="meta-label">Medien noch nicht im aktuellen Bucket</span>
+                <strong>{operationsHealth.summary.pendingMediaMirrorCount}</strong>
+              </div>
             </div>
+
+            <section className="subsection-card">
+              <h3>Medien spiegeln</h3>
+              <p className="empty-state">
+                Reiht für Tokens mit Medienquelle, die noch nicht im aktuellen Bucket liegen,
+                einen Medien-Refresh ein — pro Klick bis zu {mediaMirrorBatchSize} Tokens. Der
+                Zähler oben zeigt, was noch offen ist; nochmal klicken setzt fort.
+              </p>
+              <form action="/remirror" method="post">
+                {/*
+                  A failed telemetry load leaves the counter at 0, which must not be
+                  rendered as "everything mirrored" — that is a false all-clear in
+                  exactly the situation where the number is unknown.
+                */}
+                <button
+                  type="submit"
+                  className="detail-link"
+                  disabled={
+                    Boolean(operationsHealthWarning) ||
+                    operationsHealth.summary.pendingMediaMirrorCount === 0
+                  }
+                >
+                  {operationsHealthWarning
+                    ? "Zähler nicht verfügbar"
+                    : operationsHealth.summary.pendingMediaMirrorCount === 0
+                      ? "Alles gespiegelt"
+                      : "Nächste Tokens einreihen"}
+                </button>
+              </form>
+            </section>
 
             <section className="subsection-card">
               <h3>Live queue jobs</h3>

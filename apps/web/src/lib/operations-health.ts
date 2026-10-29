@@ -2,6 +2,7 @@ import { Queue } from "bullmq";
 import type { Db } from "mongodb";
 import { queueNames, type QueueName } from "@nft-platform/queue";
 import {
+  countTokensPendingMediaMirror,
   getMongoCollections,
   serializeCollectionDocument,
   serializeJobDocument,
@@ -22,6 +23,7 @@ export type OperationsHealthSnapshot = {
     retryingMediaJobsCount: number;
     failedJobsCount: number;
     laggingCollectionsCount: number;
+    pendingMediaMirrorCount: number;
   };
   activeJobs: SerializedJob[];
   retryingMediaJobs: SerializedJob[];
@@ -35,7 +37,10 @@ export type OperationsHealthSnapshot = {
   >;
 };
 
-export async function loadOperationsHealth(database: Db): Promise<OperationsHealthSnapshot> {
+export async function loadOperationsHealth(
+  database: Db,
+  params: { currentMediaPublicBaseUrl: string }
+): Promise<OperationsHealthSnapshot> {
   const collections = getMongoCollections(database);
   const liveActiveJobs = await listLiveQueueJobs(database);
   const retryingMediaJobs = liveActiveJobs.filter((job) => job.type === "refresh-media" && job.attempts > 1);
@@ -44,7 +49,8 @@ export async function loadOperationsHealth(database: Db): Promise<OperationsHeal
     recentFailedJobs,
     laggingCollections,
     failedJobsCount,
-    laggingCollectionsCount
+    laggingCollectionsCount,
+    pendingMediaMirrorCount
   ] = await Promise.all([
     collections.jobs
       .find({ status: "failed" })
@@ -53,7 +59,11 @@ export async function loadOperationsHealth(database: Db): Promise<OperationsHeal
       .toArray(),
     listLaggingCollections(database, 6),
     collections.jobs.countDocuments({ status: "failed" }),
-    countLaggingCollections(database)
+    countLaggingCollections(database),
+    countTokensPendingMediaMirror({
+      database,
+      currentPublicBaseUrl: params.currentMediaPublicBaseUrl
+    })
   ]);
 
   return {
@@ -61,7 +71,8 @@ export async function loadOperationsHealth(database: Db): Promise<OperationsHeal
       activeJobsCount: liveActiveJobs.length,
       retryingMediaJobsCount: retryingMediaJobs.length,
       failedJobsCount,
-      laggingCollectionsCount
+      laggingCollectionsCount,
+      pendingMediaMirrorCount
     },
     activeJobs: liveActiveJobs.slice(0, 8).map(serializeJobDocument),
     retryingMediaJobs: retryingMediaJobs.slice(0, 6).map(serializeJobDocument),
