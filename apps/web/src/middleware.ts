@@ -11,6 +11,19 @@ const allowedCorsOrigins = buildAllowedCorsOrigins();
  * which makes the server appear unresponsive.
  */
 export function middleware(request: NextRequest): NextResponse {
+  // The operator UI exposes indexed state, job payloads and write paths that queue
+  // work, so it is gated. Everything under /api stays untouched: /api/v1 already
+  // authenticates per request via HMAC, which is how consuming services such as the
+  // marketplace reach it, and the health and media routes have to stay reachable for
+  // monitoring and previews.
+  if (!isApiRoute(request)) {
+    const operatorUiDenial = denyOperatorUiRequest(request);
+
+    if (operatorUiDenial) {
+      return operatorUiDenial;
+    }
+  }
+
   if (request.headers.has("next-action")) {
     return buildErrorResponse({
       status: 400,
@@ -57,6 +70,90 @@ export const config = {
 
 function isApiRoute(request: NextRequest): boolean {
   return request.nextUrl.pathname === "/api" || request.nextUrl.pathname.startsWith("/api/");
+}
+
+/**
+ * Basic auth for the operator UI. Returns a response when the request must not pass,
+ * null when it may. Missing credentials fail closed with 503 rather than leaving the
+ * UI open: a deployment that forgot the variables is then loud instead of silently
+ * unprotected.
+ */
+function denyOperatorUiRequest(request: NextRequest): NextResponse | null {
+  const expectedUser = process.env.OPERATOR_UI_USER?.trim() ?? "";
+  const expectedPassword = process.env.OPERATOR_UI_PASSWORD ?? "";
+
+  if (!expectedUser || !expectedPassword) {
+    return buildErrorResponse({
+      status: 503,
+      error: "operator_ui_not_configured",
+      message:
+        "The operator UI is unavailable until OPERATOR_UI_USER and OPERATOR_UI_PASSWORD are configured.",
+      request
+    });
+  }
+
+  const authorization = request.headers.get("authorization") ?? "";
+  const credentials = decodeBasicCredentials(authorization);
+
+  if (
+    credentials &&
+    matchesConstantTime(credentials.user, expectedUser) &&
+    matchesConstantTime(credentials.password, expectedPassword)
+  ) {
+    return null;
+  }
+
+  const response = buildErrorResponse({
+    status: 401,
+    error: "operator_ui_unauthorized",
+    message: "Authentication is required for the operator UI.",
+    request
+  });
+
+  // Without this header the browser shows the JSON body instead of prompting.
+  response.headers.set("www-authenticate", 'Basic realm="NFT Data Platform", charset="UTF-8"');
+  return response;
+}
+
+function decodeBasicCredentials(authorization: string): { user: string; password: string } | null {
+  const [scheme, encoded] = authorization.split(" ");
+
+  if (!scheme || scheme.toLowerCase() !== "basic" || !encoded) {
+    return null;
+  }
+
+  try {
+    const decoded = atob(encoded);
+    const separatorIndex = decoded.indexOf(":");
+
+    if (separatorIndex < 0) {
+      return null;
+    }
+
+    return {
+      user: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1)
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Length-independent comparison, so a wrong password cannot be narrowed down by
+ * timing. node:crypto is deliberately avoided here to keep the middleware free of
+ * Node built-ins.
+ */
+function matchesConstantTime(candidate: string, expected: string): boolean {
+  const candidateBytes = new TextEncoder().encode(candidate);
+  const expectedBytes = new TextEncoder().encode(expected);
+  let difference = candidateBytes.length ^ expectedBytes.length;
+
+  for (let index = 0; index < Math.max(candidateBytes.length, expectedBytes.length); index += 1) {
+    difference |= (candidateBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  }
+
+  return difference === 0;
 }
 
 function isRequestBodyTooLarge(request: NextRequest): boolean {
