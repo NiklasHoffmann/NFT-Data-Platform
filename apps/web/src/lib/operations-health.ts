@@ -3,6 +3,7 @@ import type { Db } from "mongodb";
 import { queueNames, type QueueName } from "@nft-platform/queue";
 import {
   countTokensPendingMediaMirror,
+  countTokensPendingMetadata,
   getMongoCollections,
   serializeCollectionDocument,
   serializeJobDocument,
@@ -24,6 +25,7 @@ export type OperationsHealthSnapshot = {
     failedJobsCount: number;
     laggingCollectionsCount: number;
     pendingMediaMirrorCount: number;
+    pendingMetadataCount: number;
   };
   activeJobs: SerializedJob[];
   retryingMediaJobs: SerializedJob[];
@@ -50,7 +52,8 @@ export async function loadOperationsHealth(
     laggingCollections,
     failedJobsCount,
     laggingCollectionsCount,
-    pendingMediaMirrorCount
+    pendingMediaMirrorCount,
+    pendingMetadataCount
   ] = await Promise.all([
     collections.jobs
       .find({ status: "failed" })
@@ -63,7 +66,8 @@ export async function loadOperationsHealth(
     countTokensPendingMediaMirror({
       database,
       currentPublicBaseUrl: params.currentMediaPublicBaseUrl
-    })
+    }),
+    countTokensPendingMetadata({ database })
   ]);
 
   return {
@@ -72,7 +76,8 @@ export async function loadOperationsHealth(
       retryingMediaJobsCount: retryingMediaJobs.length,
       failedJobsCount,
       laggingCollectionsCount,
-      pendingMediaMirrorCount
+      pendingMediaMirrorCount,
+      pendingMetadataCount
     },
     activeJobs: liveActiveJobs.slice(0, 8).map(serializeJobDocument),
     retryingMediaJobs: retryingMediaJobs.slice(0, 6).map(serializeJobDocument),

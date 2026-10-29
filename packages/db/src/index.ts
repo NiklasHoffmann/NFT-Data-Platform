@@ -2182,6 +2182,37 @@ export async function countTokensPendingMediaMirror(params: {
   return result?.total ?? 0;
 }
 
+/**
+ * Tokens whose metadata never came through. A media URL only exists once metadata has
+ * been read, so these cannot be repaired by a media refresh -- they need the metadata
+ * step first, after which the worker queues the media follow-up itself.
+ *
+ * "stale" is deliberately excluded: that metadata did load once and merely aged out,
+ * which is the sweep's job rather than a repair action.
+ */
+const pendingMetadataFilter: Filter<TokenDocument> = {
+  metadataStatus: { $in: ["pending", "failed"] }
+};
+
+export async function countTokensPendingMetadata(params: { database: Db }): Promise<number> {
+  return getMongoCollections(params.database).tokens.countDocuments(pendingMetadataFilter);
+}
+
+export async function listTokenIdentitiesPendingMetadata(params: {
+  database: Db;
+  limit: number;
+}): Promise<TokenMediaMirrorIdentity[]> {
+  return getMongoCollections(params.database)
+    .tokens.find<TokenMediaMirrorIdentity>(pendingMetadataFilter, {
+      projection: { _id: 0, chainId: 1, contractAddress: 1, tokenId: 1 }
+    })
+    // Oldest attempt first, so repeated runs work through the backlog instead of
+    // retrying the same head of the list.
+    .sort({ lastMetadataFetchAt: 1, _id: 1 })
+    .limit(params.limit)
+    .toArray();
+}
+
 export async function listTokenIdentitiesPendingMediaMirror(params: {
   database: Db;
   currentPublicBaseUrl: string;
