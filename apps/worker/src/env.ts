@@ -1,4 +1,5 @@
 import process from "node:process";
+import { parseIpfsGatewayHosts } from "@nft-platform/chain";
 import { normalizeContractAddress, supportedChains, type Scope } from "@nft-platform/domain";
 import { storageConfigSchema, type StorageConfig } from "@nft-platform/storage";
 import { parseScopeList } from "@nft-platform/security";
@@ -16,6 +17,7 @@ const workerRuntimeConfigSchema = z.object({
   S3_BUCKET: z.string().min(1),
   S3_PUBLIC_BASE_URL: z.string().url(),
   MEDIA_MAX_VIDEO_BYTES: z.coerce.number().int().positive().default(25_000_000),
+  IPFS_GATEWAY_URLS: z.string().default(""),
   CHAIN_INDEXING_ENABLED: z.string().default("false"),
   CHAIN_INDEXING_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
   CHAIN_INDEXING_BATCH_SIZE: z.coerce.number().int().positive().default(10),
@@ -78,6 +80,7 @@ export type WorkerRuntimeConfig = {
   rpcUrls: Record<number, string>;
   storage: StorageConfig;
   mediaMaxVideoBytes: number;
+  ipfsGatewayHosts: string[];
   chainIndexingEnabled: boolean;
   chainIndexingPollIntervalMs: number;
   chainIndexingBatchSize: number;
@@ -123,6 +126,9 @@ export function getWorkerRuntimeConfig(): WorkerRuntimeConfig {
       publicBaseUrl: parsed.S3_PUBLIC_BASE_URL
     }),
     mediaMaxVideoBytes: parsed.MEDIA_MAX_VIDEO_BYTES,
+    // Surfaced on the config so a startup log can show which gateways are in use;
+    // the resolution itself is memoized inside @nft-platform/chain.
+    ipfsGatewayHosts: parseIpfsGatewayHosts(parsed.IPFS_GATEWAY_URLS),
     chainIndexingEnabled: parsed.CHAIN_INDEXING_ENABLED.trim().toLowerCase() === "true",
     chainIndexingPollIntervalMs: parsed.CHAIN_INDEXING_POLL_INTERVAL_MS,
     chainIndexingBatchSize: parsed.CHAIN_INDEXING_BATCH_SIZE,
