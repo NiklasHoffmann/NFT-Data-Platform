@@ -1,7 +1,15 @@
-import { buildIpfsGatewayUrls, defaultIpfsGatewayHosts, normalizeAssetUri, parseIpfsGatewayHosts } from "@nft-platform/chain";
+import {
+  buildIpfsGatewayUrls,
+  buildIpfsRetryUrls,
+  defaultIpfsGatewayHosts,
+  normalizeAssetUri,
+  parseIpfsGatewayHosts,
+  parseIpfsGatewayUrl
+} from "@nft-platform/chain";
 import { describe, expect, it } from "vitest";
 
 const cid = "QmPZ9gcCEpqKTo6aq61g2nXGUhM4iCL3ewB6LDXZCtioEB";
+const cid32 = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
 const hosts = ["gw-one.example", "gw-two.example"];
 
 describe("parseIpfsGatewayHosts", () => {
@@ -89,5 +97,68 @@ describe("normalizeAssetUri", () => {
 
   it("returns the input unchanged when an IPFS URI carries no payload", () => {
     expect(normalizeAssetUri("ipfs://", { gatewayHosts: hosts })).toBe("ipfs://");
+  });
+});
+
+describe("parseIpfsGatewayUrl", () => {
+  it("reads the path style shape", () => {
+    expect(parseIpfsGatewayUrl(`https://dweb.link/ipfs/${cid}/image.png`)).toEqual({
+      namespace: "ipfs",
+      path: `${cid}/image.png`,
+      search: ""
+    });
+  });
+
+  it("reads the subdomain style shape, where the CID sits in the host", () => {
+    expect(parseIpfsGatewayUrl(`https://${cid32}.ipfs.dweb.link/image.png`)).toEqual({
+      namespace: "ipfs",
+      path: `${cid32}/image.png`,
+      search: ""
+    });
+  });
+
+  it("treats a bare subdomain host as having no sub-path", () => {
+    expect(parseIpfsGatewayUrl(`https://${cid32}.ipfs.dweb.link`)).toEqual({
+      namespace: "ipfs",
+      path: cid32,
+      search: ""
+    });
+  });
+
+  it("keeps the query string, which some gateways depend on", () => {
+    expect(parseIpfsGatewayUrl(`https://dweb.link/ipfs/${cid}?filename=a.png`)?.search).toBe(
+      "?filename=a.png"
+    );
+  });
+
+  it("handles ipns in both shapes", () => {
+    expect(parseIpfsGatewayUrl("https://dweb.link/ipns/example.eth")?.namespace).toBe("ipns");
+    expect(parseIpfsGatewayUrl("https://example-eth.ipns.dweb.link")?.namespace).toBe("ipns");
+  });
+
+  it("returns null for anything that does not reference IPFS content", () => {
+    expect(parseIpfsGatewayUrl("https://example.com/image.png")).toBeNull();
+    expect(parseIpfsGatewayUrl("https://dweb.link/")).toBeNull();
+    expect(parseIpfsGatewayUrl("not a url")).toBeNull();
+  });
+});
+
+describe("buildIpfsRetryUrls", () => {
+  it("rewrites a path style gateway URL onto every configured gateway", () => {
+    expect(buildIpfsRetryUrls(`https://dweb.link/ipfs/${cid}`, hosts)).toEqual([
+      `https://gw-one.example/ipfs/${cid}`,
+      `https://gw-two.example/ipfs/${cid}`
+    ]);
+  });
+
+  it("rewrites a subdomain style gateway URL to path style, which is the bug this covers", () => {
+    expect(buildIpfsRetryUrls(`https://${cid32}.ipfs.dweb.link/image.png`, hosts)).toEqual([
+      `https://gw-one.example/ipfs/${cid32}/image.png`,
+      `https://gw-two.example/ipfs/${cid32}/image.png`
+    ]);
+  });
+
+  it("yields nothing for a plain HTTP media URL, so the source stays the only candidate", () => {
+    expect(buildIpfsRetryUrls("https://cdn.example.com/a.png", hosts)).toEqual([]);
   });
 });

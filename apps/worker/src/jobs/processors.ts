@@ -9,14 +9,15 @@ import {
   findContractDeploymentBlock,
   assetFetchUserAgent,
   buildIpfsGatewayUrls,
+  buildIpfsRetryUrls,
   getChainPublicClient,
   getRpcUrlForChain,
   hasErc1155TokenTransferActivity,
   hasContractBytecode,
   isSupportedChainId,
   normalizeAssetUri,
+  parseIpfsGatewayUrl,
   readCollectionSignalsOnChain,
-  resolveIpfsGatewayHosts,
   readErc721TransfersInRange,
   readErc1155TokenExists,
   readErc1155TransfersForTokenInRange,
@@ -2112,12 +2113,18 @@ function buildMetadataFetchCandidateUrls(params: {
   rawUri: string | null;
   resolvedUri: string | null;
 }): string[] {
-  const candidates = [
+  const direct = [
     ...(params.resolvedUri ? [params.resolvedUri] : []),
     ...(params.rawUri ? expandMetadataFetchCandidatesFromRawUri(params.rawUri) : [])
   ].map((candidate) => candidate.trim()).filter(Boolean);
 
-  return [...new Set(candidates)];
+  // resolvedUri was written when the token was first indexed and can name a gateway
+  // that has since stopped serving content, and a contract may store such a URL
+  // directly. Append the configured gateways for every candidate that references
+  // IPFS, so a dead host is a slow first attempt rather than a terminal failure.
+  const retries = direct.flatMap((candidate) => buildIpfsRetryUrls(candidate));
+
+  return [...new Set([...direct, ...retries])];
 }
 
 function expandMetadataFetchCandidatesFromRawUri(rawUri: string): string[] {
@@ -2931,39 +2938,17 @@ function classifyRemoteMediaFetchFailure(params: {
 }
 
 function buildMediaFetchCandidateUrls(sourceUrl: string): string[] {
-  const candidates = [sourceUrl];
-
-  try {
-    const url = new URL(sourceUrl);
-    const normalizedPath = url.pathname.replace(/\/+/g, "/");
-
-    if (!normalizedPath.startsWith("/ipfs/") && !normalizedPath.startsWith("/ipns/")) {
-      return candidates;
-    }
-
-    // The source URL already names a gateway; retry the same path on the configured
-    // ones, which is what rescues media whose original gateway is gone.
-    for (const host of resolveIpfsGatewayHosts()) {
-      const candidate = new URL(sourceUrl);
-      candidate.host = host;
-      candidate.protocol = "https:";
-      candidates.push(candidate.toString());
-    }
-  } catch {
-    return candidates;
-  }
-
-  return [...new Set(candidates)];
+  // The source URL already names a gateway; retry the same content on the configured
+  // ones, which is what rescues media whose original gateway is gone. buildIpfsRetryUrls
+  // handles both path style and subdomain style, so a stored <cid>.ipfs.dweb.link URL
+  // is retried rather than left stuck on a host that no longer serves it.
+  return [...new Set([sourceUrl, ...buildIpfsRetryUrls(sourceUrl)])];
 }
 
 function isIpfsLikeMediaUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const pathname = url.pathname.replace(/\/+/g, "/");
-    return pathname.startsWith("/ipfs/") || pathname.startsWith("/ipns/");
-  } catch {
-    return /^ipfs:\/\//i.test(value);
-  }
+  // Decides whether a 404 or 410 counts as retryable, so it has to recognise the same
+  // shapes the retry list does -- including subdomain gateways.
+  return parseIpfsGatewayUrl(value) !== null || /^ipfs:\/\//i.test(value);
 }
 
 function candidateUrlMatchesSource(sourceUrl: string, candidateUrl: string): boolean {
