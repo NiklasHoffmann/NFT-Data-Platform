@@ -14,6 +14,7 @@
     "db:init": "tsx scripts/init-db.ts",
     "db:ensure-indexes": "tsx scripts/ensure-indexes.ts",
     "api:create-client": "tsx scripts/create-api-client.ts",
+    "media:remirror": "tsx scripts/remirror-media.ts",
     "smoke:refresh": "tsx scripts/smoke-refresh-jobs.ts",
     "smoke:fixtures": "tsx scripts/smoke-validated-fixtures.ts",
     "smoke:reindex-erc721": "tsx scripts/smoke-reindex-erc721.ts",

@@ -1,6 +1,8 @@
 # Coolify Step-by-Step Deployment (App-Only + External Services)
 
-This guide deploys the application (`web` + `worker`) separately from MongoDB, Redis, and MinIO so app deploys are fast and do not restart data services.
+This guide deploys the application (`web` + `worker`) separately from MongoDB, Redis, and the object store so app deploys are fast and do not restart data services.
+
+The object store is RustFS. The application only talks S3, so any S3-compatible store works; the step-by-step values below are for RustFS.
 
 ## 1. Target Architecture
 
@@ -8,7 +10,7 @@ Create 4 separate Coolify applications in the same project/network:
 
 1. `nft-data-mongo`
 2. `nft-data-redis`
-3. `nft-data-minio`
+3. `nft-data-rustfs`
 4. `nft-data-platform` (this repository with `docker-compose.coolify.yml`)
 
 ## 2. MongoDB Service
@@ -53,14 +55,14 @@ Use a dedicated Docker image app.
 11. Add persistent volume mounted to `/data`
 12. Deploy and wait for healthy status.
 
-## 4. MinIO Service
+## 4. RustFS Service
 
 Use a dedicated Docker image app.
 
 1. General
-2. Name: `nft-data-minio`
-3. Docker Image: `minio/minio:latest`
-4. Command: `minio server /data --console-address :9001`
+2. Name: `nft-data-rustfs`
+3. Docker Image: `rustfs/rustfs:latest`
+4. Command: leave default
 5. Domains
 6. S3 API domain -> port `9000` (required)
 7. Console domain -> port `9001` (optional)
@@ -69,17 +71,51 @@ Use a dedicated Docker image app.
 10. Custom Docker Options: empty
 11. Pre/Post Deployment Commands: empty
 12. Environment
-13. `MINIO_ROOT_USER=<admin-user>`
-14. `MINIO_ROOT_PASSWORD=<strong-password>`
-15. Storage
-16. Add persistent volume mounted to `/data`
-17. Deploy and wait for healthy status.
+13. `RUSTFS_ACCESS_KEY=<admin-user>`
+14. `RUSTFS_SECRET_KEY=<strong-password-at-least-16-chars>`
+15. `RUSTFS_ADDRESS=:9000`
+16. `RUSTFS_CONSOLE_ADDRESS=:9001` and `RUSTFS_CONSOLE_ENABLE=true` for the optional console
+17. Storage
+18. Add persistent volume mounted to `/data`
+19. Deploy and wait for healthy status.
+
+Verify the exact variable names against the RustFS release you pull; they have
+changed between versions.
 
 After deploy:
 
-1. Open MinIO console.
-2. Create bucket: `nft-media`.
-3. Create a dedicated access key/secret for the app (do not use root for application runtime).
+1. Create bucket: `nft-media`.
+2. Create a dedicated access key/secret for the app, rather than using the root
+   credentials for application runtime.
+3. Decide on bucket visibility. `/api/media` signs its own reads and works against a
+   private bucket, but the `cdnUrl*` values the API returns are direct links. If
+   consumers are meant to fetch those, the bucket needs an anonymous read policy;
+   otherwise point consumers at `/api/media`.
+
+### Switching object stores on a running deployment
+
+The worker stores absolute media URLs in `media_assets.cdnUrl*`, built from
+`S3_PUBLIC_BASE_URL` at the time of the upload. After changing that variable the
+stored URLs still point at the old host, and `/api/media` rejects them because it
+only proxies paths under the configured base URL. Re-mirror everything into the new
+bucket:
+
+```powershell
+$env:API_BASE_URL = "https://<your-app-domain>"
+$env:API_BOOTSTRAP_CLIENT_ID = "<same-value-as-coolify>"
+$env:API_BOOTSTRAP_KEY = "<same-value-as-coolify>"
+$env:API_BOOTSTRAP_SECRET = "<same-value-as-coolify>"
+npm run media:remirror -- --dry-run
+npm run media:remirror
+```
+
+This queues one `refresh-media` job per token with `forceDownload`, so the worker
+re-downloads each source, uploads it to the new bucket, and overwrites the stored
+URLs. Jobs are idempotent per token, so an interrupted run can be repeated. Watch
+the first few jobs before queueing the whole set: if uploads fail with HTTP 400 or
+501, the store is likely rejecting the checksum headers the AWS SDK sends by
+default, which is fixed by passing `requestChecksumCalculation: "WHEN_REQUIRED"` in
+`createStorageClientCandidates` in `packages/storage/src/index.ts`.
 
 ## 5. App Deployment From This Repository
 
@@ -100,12 +136,29 @@ Required core variables:
 3. `MONGODB_URI=mongodb://root:<url-encoded-password>@nft-data-mongo:27017/?authSource=admin`
 4. `MONGODB_DATABASE=nft_data_platform`
 5. `REDIS_URL=redis://:<url-encoded-password>@nft-data-redis:6379`
-6. `S3_ENDPOINT=http://nft-data-minio:9000`
+6. `S3_ENDPOINT=https://<your-rustfs-s3-domain>`
 7. `S3_REGION=us-east-1`
-8. `S3_ACCESS_KEY=<minio-app-access-key>`
-9. `S3_SECRET_KEY=<minio-app-secret-key>`
+8. `S3_ACCESS_KEY=<rustfs-app-access-key>`
+9. `S3_SECRET_KEY=<rustfs-app-secret-key>`
 10. `S3_BUCKET=nft-media`
-11. `S3_PUBLIC_BASE_URL=https://<your-minio-s3-domain>/nft-media`
+11. `S3_PUBLIC_BASE_URL=https://<your-rustfs-s3-domain>/nft-media`
+
+On the two storage URLs, which are the easiest pair to get wrong:
+
+- Neither carries a port. The `:9000` notation belongs in Coolify's domain field,
+  where it tells the proxy which container port to route to; from outside the stack
+  the domain answers on 443.
+- `S3_ENDPOINT` is the bare origin, without the bucket. `S3_PUBLIC_BASE_URL` is the
+  same origin plus the bucket path, because the storage client runs in path style.
+- `S3_ENDPOINT` may instead be the internal `http://<service-name>:9000`, which skips
+  the proxy hop, but only if the object store and this stack share a Docker network.
+  `docker-compose.coolify.yml` declares its own `public` network, so a separately
+  deployed store is not reachable by container name unless both resources were
+  explicitly joined to a shared Coolify network. The public domain always works.
+- `S3_PUBLIC_BASE_URL` must be resolvable by API consumers. It is stored verbatim in
+  `media_assets.cdnUrl*` and returned in API responses, so an internal address here
+  hands out URLs that nobody outside the Docker network can fetch.
+- Confirm the domain routes to the S3 API port `9000`, not the console port `9001`.
 
 RPC variables:
 
@@ -191,15 +244,17 @@ npm run db:init
 1. `GET /api/health/live` returns `200` quickly.
 2. `GET /api/health` returns all dependencies as `ok`.
 3. Trigger one media refresh and verify storage object appears in `nft-media`.
-4. Redeploy app and confirm Mongo/Redis/MinIO containers are not restarted.
+4. Redeploy app and confirm Mongo/Redis/RustFS containers are not restarted.
 5. Read one indexed token and confirm the response carries a `freshness` block.
 6. Confirm no collection document is missing `indexedTokenCount`, `holderCount`, or
    `previewTokenId`, which would mean step 6 was skipped.
 
 ## 8. Common Misconfigurations
 
-1. MinIO app configured with port `80` or mapping `3000:3000`.
+1. Object store app configured with port `80` or mapping `3000:3000`.
 2. Leftover pre-deploy command like `php artisan migrate`.
-3. Missing persistent volume on Mongo/Redis/MinIO.
+3. Missing persistent volume on Mongo/Redis/RustFS.
 4. Passwords in URIs not URL-encoded.
-5. `S3_PUBLIC_BASE_URL` not matching your MinIO S3 domain + bucket path.
+5. `S3_PUBLIC_BASE_URL` not matching your S3 domain + bucket path.
+6. Object store swapped without re-mirroring, leaving `media_assets.cdnUrl*` on the
+   previous host and `/api/media` answering `400 unsupported_media_url`.

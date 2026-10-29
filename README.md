@@ -9,7 +9,7 @@ NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and servi
 - Protected API surfaces using API keys, HMAC request signing, scope checks, IP allowlists, replay protection, rate limiting, and audit logging.
 - Read models for collections, tokens, ERC-721 ownership, ERC-1155 balances, metadata versions, media assets, jobs, API clients, and audit logs.
 - Operator tooling for inspecting the current indexed state rather than reading live chain data in the request path.
-- Deployment thinking for local Docker Compose and an app-only Coolify deployment where MongoDB, Redis, and S3/MinIO are managed outside the app stack.
+- Deployment thinking for local Docker Compose and an app-only Coolify deployment where MongoDB, Redis, and S3-compatible storage are managed outside the app stack.
 
 ## Tech stack
 
@@ -17,7 +17,7 @@ NFT Data Platform is a TypeScript monorepo for ingesting, normalizing, and servi
 - TypeScript across the full monorepo.
 - MongoDB for normalized read models and operational records.
 - Redis + BullMQ for refresh, media, and reindex workflows.
-- MinIO / S3-compatible object storage for mirrored media.
+- S3-compatible object storage for mirrored media: RustFS in the deployed setup, MinIO in local Compose. The storage package only speaks S3, so either works without code changes.
 - Zod for runtime validation of environment variables, job payloads, and request inputs.
 - AWS SDK S3 client for storage-backed media reads through the web application.
 
@@ -122,6 +122,9 @@ Indexed data ages: a mutable `tokenURI`, a re-pinned IPFS document, or a delayed
 - MinIO
 - a MinIO init container that creates the `nft-media` bucket for local use
 
+Local Compose stays on MinIO. The deployed stack uses RustFS; both are reached through
+the same `S3_*` variables, so nothing in the application differs between them.
+
 ## Environment variables
 
 The project uses `.env.example` as the local baseline and validates web runtime configuration in `apps/web/src/lib/env.ts`.
@@ -198,7 +201,7 @@ Legacy `RPC_MAINNET_URL` and `RPC_SEPOLIA_URL` names are still accepted in code 
 - `GET /api/health` — aggregated readiness signal for web + dependencies
 - `GET /api/health/db` — MongoDB dependency status
 - `GET /api/health/redis` — Redis dependency status
-- `GET /api/health/storage` — S3/MinIO dependency status
+- `GET /api/health/storage` — object storage dependency status, via `HeadBucket`
 - `GET /api/media?url=...` — storage-constrained media proxy for previews
 
 ## Representative APIs
@@ -230,6 +233,10 @@ All `/api/v1/*` routes are protected by HMAC-based API authentication.
 - `npm run typecheck`
 - `npm run db:init`
 - `npm run api:request`
+- `npm run api:create-client`
+- `npm run media:remirror` — re-queues every token's media into the currently configured
+  bucket, for when the object store or `S3_PUBLIC_BASE_URL` changes. Supports
+  `--dry-run`, `--chain-id`, `--contract` and `--limit`; see `-- --help`.
 
 ### Smoke and regression scripts
 
@@ -260,6 +267,7 @@ Notes based on the current codebase:
 - The web service listens on port `3000`.
 - In Coolify Compose deployments, if the `web` service listens on container port `3000`, enter the domain with `:3000` in Coolify for that service so the proxy routes to the correct internal port while still exposing the app on the normal public URL.
 - `MONGODB_URI`, `REDIS_URL`, `S3_ENDPOINT`, and `S3_PUBLIC_BASE_URL` must point to externally reachable services from inside Coolify.
+- `S3_PUBLIC_BASE_URL` is stored verbatim in `media_assets.cdnUrl*` at upload time. Changing the object store means re-mirroring media with `npm run media:remirror`, otherwise stored URLs keep pointing at the previous host.
 - `CHAIN_INDEXING_ENABLED=false` is a reasonable initial deployment default.
 - After first successful deploy, run `npm run db:init` once against production env to ensure validators, indexes, and bootstrap API client records are in place.
 
@@ -282,7 +290,7 @@ For exact UI-level setup fields and ordering, follow `docs/coolify-step-by-step.
 - `docs/wallet-application-requirements.md` — target architecture and implementation requirements for the separate wallet service
 - `docs/marketplace-application-requirements.md` — target architecture and implementation requirements for the separate marketplace service
 - `docs/admin-governance-application-requirements.md` — target architecture and implementation requirements for the separate admin and governance service
-- `docs/coolify-step-by-step.md` — exact Coolify setup for MongoDB, Redis, MinIO, and app-only deployment
+- `docs/coolify-step-by-step.md` — exact Coolify setup for MongoDB, Redis, RustFS, and app-only deployment, including how to switch object stores
 - `docker-compose.coolify.yml` — production-oriented deployment scaffold
 - `scripts/` — operational and regression tooling
 
