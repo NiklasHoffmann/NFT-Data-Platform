@@ -6,6 +6,7 @@ import {
   getMongoCollections,
   listErc721OwnedTokenIdsForCollection,
   listErc1155Balances,
+  listTokenPage,
   listTokens,
   serializeCollectionDocument,
   serializeErc1155BalanceDocument,
@@ -27,13 +28,15 @@ import { DiscoverLiveRefresh } from "./discover-live-refresh";
 import { DiscoverSubmitButton } from "./discover-submit-button";
 import { InteractiveMediaPreviewGallery, type MediaGalleryItem, type MediaActionLink } from "./media-preview-gallery";
 import { ProgressiveCardGrid } from "./progressive-card-grid";
+import { TokenPagination } from "./token-pagination";
 import { mediaMirrorBatchSize } from "./remirror-flow";
 
 const tokenScopedJobTypes = ["refresh-token", "refresh-media"] as const;
 const collectionScopedJobTypes = ["refresh-collection", "reindex-range"] as const;
-const homeViewSchema = z.enum(["nft", "collection", "jobs", "raw", "operations"]);
+const homeViewSchema = z.enum(["nft", "collection", "tokens", "jobs", "raw", "operations"]);
 const webRuntimeConfig = getWebRuntimeConfig();
 const randomTokenSampleSize = 18;
+const discoveredTokensPageSize = 12;
 const randomTokenSampleTtlMs = 10 * 60 * 1000;
 
 const globalRandomTokenSampleRegistry = globalThis as typeof globalThis & {
@@ -47,6 +50,7 @@ const homeQuerySchema = z.object({
   contractAddress: evmAddressSchema.optional(),
   tokenId: evmTokenIdSchema.optional(),
   view: homeViewSchema.optional(),
+  page: z.coerce.number().int().positive().optional(),
   status: z.enum(["loaded", "queued", "invalid", "not-found", "unresolved", "failed"]).optional(),
   message: z.string().trim().min(1).optional()
 });
@@ -86,6 +90,7 @@ export default async function HomePage(props: {
     contractAddress: firstValue(rawSearchParams?.contractAddress),
     tokenId: firstValue(rawSearchParams?.tokenId),
     view: firstValue(rawSearchParams?.view),
+    page: firstValue(rawSearchParams?.page),
     status: firstValue(rawSearchParams?.status),
     message: firstValue(rawSearchParams?.message)
   });
@@ -99,8 +104,12 @@ export default async function HomePage(props: {
     : "Enter a valid contract and optional token id to discover collection and NFT data from the local read model.";
   const shouldLoadIdentityData = parsedQuery.success && Boolean(parsedQuery.data.contractAddress);
   const shouldLoadOperationsHealth = activeView === "operations";
+  const shouldLoadDiscoveredTokens = activeView === "tokens";
   const shouldLoadHomepageTokenPreviews = activeView === "nft" && !initialContractAddress && !initialTokenId;
-  const database = shouldLoadIdentityData || shouldLoadOperationsHealth || shouldLoadHomepageTokenPreviews ? getWebMongoDatabase() : null;
+  const database =
+    shouldLoadIdentityData || shouldLoadOperationsHealth || shouldLoadHomepageTokenPreviews || shouldLoadDiscoveredTokens
+      ? getWebMongoDatabase()
+      : null;
   let operationsHealth = emptyOperationsHealth;
   let operationsHealthWarning: string | null = null;
 
@@ -126,7 +135,28 @@ export default async function HomePage(props: {
   let collectionTokenCards: CollectionTokenCardData[] = [];
   let randomTokenCards: CollectionTokenCardData[] = [];
   let homepageTokenCards: CollectionTokenCardData[] = [];
+  let discoveredTokenCards: CollectionTokenCardData[] = [];
+  let discoveredTokenPage = { page: 1, pageCount: 1, total: 0 };
+  let discoveredTokensWarning: string | null = null;
   let pollingReason: string | null = null;
+
+  if (database && shouldLoadDiscoveredTokens) {
+    try {
+      const tokenPage = await listTokenPage({
+        database,
+        page: parsedQuery.success ? parsedQuery.data.page ?? 1 : 1,
+        pageSize: discoveredTokensPageSize
+      });
+      discoveredTokenCards = await buildTokenCardData(database, tokenPage.items);
+      discoveredTokenPage = {
+        page: tokenPage.page,
+        pageCount: tokenPage.pageCount,
+        total: tokenPage.total
+      };
+    } catch {
+      discoveredTokensWarning = "Die Token-Liste ist nicht verfügbar, solange MongoDB nicht erreichbar ist.";
+    }
+  }
 
   if (database && shouldLoadHomepageTokenPreviews) {
     try {
@@ -1098,6 +1128,61 @@ export default async function HomePage(props: {
         </section>
       ) : null}
 
+      {activeView === "tokens" ? (
+        <section className="panel panel--result">
+          <h2>Alle Tokens</h2>
+          <div className="result-stack">
+            {discoveredTokensWarning ? (
+              <p className="empty-state">{discoveredTokensWarning}</p>
+            ) : discoveredTokenPage.total === 0 ? (
+              <p className="empty-state">
+                Es ist noch kein Token indexiert. Nutze &bdquo;NFT info&ldquo;, um das erste zu erfassen.
+              </p>
+            ) : (
+              <>
+                <dl className="metadata-grid">
+                  <div>
+                    <dt className="meta-label">Indexierte Tokens</dt>
+                    <dd>
+                      <strong>{discoveredTokenPage.total}</strong>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="meta-label">Seite</dt>
+                    <dd>
+                      <strong>
+                        {discoveredTokenPage.page} von {discoveredTokenPage.pageCount}
+                      </strong>
+                    </dd>
+                  </div>
+                </dl>
+
+                {/*
+                  A plain grid rather than ProgressiveCardGrid: the page already caps
+                  the result at discoveredTokensPageSize server-side, so a client-side
+                  "load more" would have nothing left to reveal.
+                */}
+                <div className="asset-grid collection-token-grid">
+                  {discoveredTokenCards.map((discoveredToken) =>
+                    renderCollectionTokenCard({
+                      collectionToken: discoveredToken,
+                      collectionStandard: discoveredToken.token.standard
+                    })
+                  )}
+                </div>
+
+                <TokenPagination
+                  page={discoveredTokenPage.page}
+                  pageCount={discoveredTokenPage.pageCount}
+                  hrefForPage={(page) => buildHomeHref({ view: "tokens", page })}
+                  label="Token-Seiten"
+                />
+              </>
+            )}
+          </div>
+        </section>
+      ) : null}
+
       {activeView === "jobs" ? (
         <section className="panel panel--result">
           <h2>Jobs</h2>
@@ -1789,6 +1874,11 @@ function ViewMenu(props: {
       view: "collection",
       label: "Collection",
       description: "Collection metadata, contract signals, and indexed tokens"
+    },
+    {
+      view: "tokens",
+      label: "Alle Tokens",
+      description: "Jedes jemals indexierte Token, seitenweise"
     },
     {
       view: "jobs",
@@ -2725,6 +2815,7 @@ function buildHomeHref(params: {
   status?: string;
   message?: string;
   view?: HomeView;
+  page?: number;
 }): string {
   const searchParams = new URLSearchParams();
 
@@ -2742,6 +2833,10 @@ function buildHomeHref(params: {
 
   if (params.view) {
     searchParams.set("view", params.view);
+  }
+
+  if (params.page && params.page > 1) {
+    searchParams.set("page", String(params.page));
   }
 
   if (params.status) {

@@ -1377,6 +1377,53 @@ export async function listTokens(params: {
     .toArray();
 }
 
+export type TokenPage = {
+  items: TokenDocument[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+};
+
+/**
+ * One page of tokens, newest first, with the total so the UI can render page numbers.
+ *
+ * Uses skip rather than the cursor that listTokens takes: a cursor cannot express
+ * "jump to page 7", and an operator browsing the archive wants to. Skip degrades on
+ * very large offsets, which is acceptable for a tool where the operator walks pages
+ * rather than deep-linking into the tail.
+ */
+export async function listTokenPage(params: {
+  database: Db;
+  page: number;
+  pageSize: number;
+  chainId?: number;
+  contractAddress?: string;
+}): Promise<TokenPage> {
+  const pageSize = Math.max(1, Math.trunc(params.pageSize));
+  const query = buildTokenFilterQuery({
+    ...(params.chainId !== undefined ? { chainId: params.chainId } : {}),
+    ...(params.contractAddress ? { contractAddress: params.contractAddress } : {})
+  });
+  const collection = getMongoCollections(params.database).tokens;
+  const total = await collection.countDocuments(query);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  // Clamp rather than return an empty page, so a stale or hand-edited page number
+  // still shows something instead of a blank grid.
+  const page = Math.min(Math.max(1, Math.trunc(params.page)), pageCount);
+
+  const items = total === 0
+    ? []
+    : await collection
+        .find(query)
+        .sort({ updatedAt: -1, _id: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .toArray();
+
+  return { items, total, page, pageSize, pageCount };
+}
+
 /**
  * Recomputes the derived collection counters and stores them on the collection document.
  *
