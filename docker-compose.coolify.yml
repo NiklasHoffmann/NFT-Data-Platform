@@ -30,8 +30,13 @@ services:
       S3_BUCKET: ${S3_BUCKET:-nft-media}
       S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:?}
       API_CLIENT_SECRET_ENCRYPTION_KEY: ${API_CLIENT_SECRET_ENCRYPTION_KEY:?}
-      OPERATOR_UI_USER: ${OPERATOR_UI_USER:?}
-      OPERATOR_UI_PASSWORD: ${OPERATOR_UI_PASSWORD:?}
+      # Deliberately not required (:?): a missing UI credential must not stop the
+      # stack from starting. Compose refuses the whole deployment on an unset
+      # required variable, which would take the worker and the HMAC-protected API
+      # down with it. The middleware already fails closed on its own, answering 503
+      # for the operator UI while /api keeps serving.
+      OPERATOR_UI_USER: ${OPERATOR_UI_USER:-}
+      OPERATOR_UI_PASSWORD: ${OPERATOR_UI_PASSWORD:-}
       API_BOOTSTRAP_CLIENT_ID: ${API_BOOTSTRAP_CLIENT_ID:?}
       API_BOOTSTRAP_KEY: ${API_BOOTSTRAP_KEY:?}
       API_BOOTSTRAP_SECRET: ${API_BOOTSTRAP_SECRET:?}
