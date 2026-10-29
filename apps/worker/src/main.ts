@@ -71,7 +71,9 @@ async function bootstrap(): Promise<void> {
               redisConnection: connection,
               rpcUrls: config.rpcUrls,
               storage: config.storage,
-              mediaMaxVideoBytes: config.mediaMaxVideoBytes
+              mediaMaxVideoBytes: config.mediaMaxVideoBytes,
+              mediaMaxImageBytes: config.mediaMaxImageBytes,
+              mediaFetchTimeoutMs: config.mediaFetchTimeoutMs
             }
           });
 
