@@ -30,6 +30,7 @@ import { InteractiveMediaPreviewGallery, type MediaGalleryItem, type MediaAction
 import { ProgressiveCardGrid } from "./progressive-card-grid";
 import { TokenPagination } from "./token-pagination";
 import { mediaMirrorBatchSize } from "./remirror-flow";
+import { metadataRepairBatchSize } from "./repair-metadata-flow";
 
 const tokenScopedJobTypes = ["refresh-token", "refresh-media"] as const;
 const collectionScopedJobTypes = ["refresh-collection", "reindex-range"] as const;
@@ -73,7 +74,8 @@ const emptyOperationsHealth: OperationsHealthSnapshot = {
     retryingMediaJobsCount: 0,
     failedJobsCount: 0,
     laggingCollectionsCount: 0,
-    pendingMediaMirrorCount: 0
+    pendingMediaMirrorCount: 0,
+    pendingMetadataCount: 0
   },
   activeJobs: [],
   retryingMediaJobs: [],
@@ -1278,7 +1280,37 @@ export default async function HomePage(props: {
                 <span className="meta-label">Medien noch nicht im aktuellen Bucket</span>
                 <strong>{operationsHealth.summary.pendingMediaMirrorCount}</strong>
               </div>
+              <div>
+                <span className="meta-label">Tokens ohne Metadaten</span>
+                <strong>{operationsHealth.summary.pendingMetadataCount}</strong>
+              </div>
             </div>
+
+            <section className="subsection-card">
+              <h3>Metadaten nachholen</h3>
+              <p className="empty-state">
+                Reiht für Tokens, deren Metadaten nie geladen wurden, einen Token-Refresh ein
+                — pro Klick bis zu {metadataRepairBatchSize}. Erst dadurch entsteht überhaupt
+                eine Medien-URL, der Worker hängt den Medien-Refresh danach selbst an. Diese
+                Tokens tauchen im Zähler darunter also erst auf, wenn das hier durch ist.
+              </p>
+              <form action="/repair-metadata" method="post">
+                <button
+                  type="submit"
+                  className="detail-link"
+                  disabled={
+                    Boolean(operationsHealthWarning) ||
+                    operationsHealth.summary.pendingMetadataCount === 0
+                  }
+                >
+                  {operationsHealthWarning
+                    ? "Zähler nicht verfügbar"
+                    : operationsHealth.summary.pendingMetadataCount === 0
+                      ? "Alle Metadaten vorhanden"
+                      : "Nächste Tokens einreihen"}
+                </button>
+              </form>
+            </section>
 
             <section className="subsection-card">
               <h3>Medien spiegeln</h3>
