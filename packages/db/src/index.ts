@@ -1406,8 +1406,12 @@ export async function listTokenPage(params: {
     ...(params.chainId !== undefined ? { chainId: params.chainId } : {}),
     ...(params.contractAddress ? { contractAddress: params.contractAddress } : {})
   });
+  // Everything whose metadata is not usable, not only what is beyond repair. The
+  // archive answers "is this worth looking at", which a token throttled behind a 429
+  // currently is not, even though a later refresh may well fix it. "stale" is left
+  // visible on purpose: that metadata did load once, so the card still shows a token.
   const query: Filter<TokenDocument> = params.excludeUnfetchableMetadata
-    ? { ...baseQuery, $nor: [permanentlyUnfetchableMetadataFilter] }
+    ? { ...baseQuery, $nor: [missingMetadataStatusFilter] }
     : baseQuery;
   const collection = getMongoCollections(params.database).tokens;
   const total = await collection.countDocuments(query);
@@ -2234,30 +2238,6 @@ export function isTerminalMetadataError(message: string | null | undefined): boo
 
   return terminalMetadataErrorPatterns.some((pattern) => pattern.test(message));
 }
-
-/**
- * Tokens whose metadata will not arrive however often they are refreshed: either the
- * contract names no URI at all, or the source behind it is gone for good. Used by the
- * archive view to take them out of sight without taking them out of the read model.
- */
-const permanentlyUnfetchableMetadataFilter: Filter<TokenDocument> = {
-  $and: [
-    missingMetadataStatusFilter,
-    {
-      $or: [
-        {
-          metadataUriRaw: { $not: { $type: "string" } },
-          metadataUriResolved: { $not: { $type: "string" } }
-        },
-        {
-          lastMetadataError: {
-            $in: terminalMetadataErrorPatterns.map((pattern) => new RegExp(pattern))
-          }
-        }
-      ]
-    }
-  ]
-};
 
 const deadMetadataSourceFilter: Filter<TokenDocument> = {
   lastMetadataError: { $in: terminalMetadataErrorPatterns.map((pattern) => new RegExp(pattern)) }
