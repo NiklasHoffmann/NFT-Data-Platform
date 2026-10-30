@@ -13,7 +13,7 @@ import { loadLocalEnvFiles } from "@nft-platform/runtime";
 import { startChainIndexingLoop } from "./chain-indexing";
 import { getWorkerRuntimeConfig } from "./env";
 import { startMetadataSweepLoop } from "./metadata-sweep";
-import { processQueueJob } from "./jobs/processors";
+import { configureMetadataFetchTimeout, processQueueJob } from "./jobs/processors";
 
 loadLocalEnvFiles({
   roots: [resolve(dirname(fileURLToPath(import.meta.url)), "../../../")]
@@ -53,6 +53,8 @@ async function bootstrap(): Promise<void> {
   } else {
     console.log("[worker] skipping database bootstrap in production; run npm run db:init separately for validators, indexes, and bootstrap API client sync.");
   }
+
+  configureMetadataFetchTimeout(config.metadataFetchTimeoutMs);
 
   const connection = new IORedis(config.redisUrl, {
     maxRetriesPerRequest: null
