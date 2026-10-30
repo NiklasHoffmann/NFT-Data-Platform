@@ -1,7 +1,9 @@
 import {
   countTokensPendingMetadata,
+  countTokensWithDeadMetadataSource,
   createJob,
   listTokenIdentitiesPendingMetadata,
+  listTokenIdentitiesWithDeadMetadataSource,
   type TokenMediaMirrorIdentity
 } from "@nft-platform/db";
 import { refreshTokenJobSchema } from "@nft-platform/queue";
@@ -20,24 +22,38 @@ export type RepairMetadataOutcome = {
   message: string;
 };
 
-export async function handleRepairMetadataSubmission(): Promise<RepairMetadataOutcome> {
+export async function handleRepairMetadataSubmission(
+  formData?: FormData
+): Promise<RepairMetadataOutcome> {
   const database = getWebMongoDatabase();
+  // The dead-source list is opt-in: those tokens are out of the backlog on purpose,
+  // and queueing them is a deliberate "try it anyway" rather than routine repair.
+  const targetsDeadSources = formData?.get("includeDeadSources") === "true";
 
   try {
-    const pendingTokens = await listTokenIdentitiesPendingMetadata({
-      database,
-      limit: metadataRepairBatchSize
-    });
+    const pendingTokens = targetsDeadSources
+      ? await listTokenIdentitiesWithDeadMetadataSource({
+          database,
+          limit: metadataRepairBatchSize
+        })
+      : await listTokenIdentitiesPendingMetadata({
+          database,
+          limit: metadataRepairBatchSize
+        });
 
     if (pendingTokens.length === 0) {
       return {
         status: "complete",
-        message: "Every token has metadata. Nothing to repair."
+        message: targetsDeadSources
+          ? "No token is currently filed under a dead metadata source."
+          : "Every token has metadata. Nothing to repair."
       };
     }
 
     const queuedCount = await queueMetadataRefreshJobs(database, pendingTokens);
-    const remainingCount = await countTokensPendingMetadata({ database });
+    const remainingCount = targetsDeadSources
+      ? await countTokensWithDeadMetadataSource({ database })
+      : await countTokensPendingMetadata({ database });
     const remainingAfterQueueing = Math.max(remainingCount - queuedCount, 0);
 
     return {
