@@ -1737,6 +1737,65 @@ type NormalizedMetadataMediaReference = {
   interactiveMediaType: InteractiveMediaType | null;
 };
 
+type ResolvedTokenMetadata = NonNullable<Awaited<ReturnType<typeof resolveMetadata>>>;
+
+/**
+ * Builds a metadata result for a tokenURI that answers with the artwork itself.
+ *
+ * Returns null for anything that is not recognisably media, so a JSON document -- or
+ * a server that forgot its content type -- still takes the normal parsing path.
+ */
+export function buildDirectMediaMetadata(document: {
+  contentType: string | null;
+  sourceUrl: string;
+}): ResolvedTokenMetadata | null {
+  const mediaKind = classifyDirectMediaContentType(document.contentType);
+
+  if (!mediaKind) {
+    return null;
+  }
+
+  const payload = { image: document.sourceUrl, contentType: document.contentType };
+
+  return {
+    payload,
+    // Hashed from the synthesised payload rather than the file: the bytes are the
+    // artwork and belong in the bucket, not in a metadata hash.
+    payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest("hex"),
+    name: null,
+    description: null,
+    externalUrl: null,
+    imageOriginalUrl: mediaKind === "image" ? document.sourceUrl : null,
+    animationOriginalUrl: mediaKind === "animation" ? document.sourceUrl : null,
+    audioOriginalUrl: mediaKind === "audio" ? document.sourceUrl : null,
+    interactiveOriginalUrl: null,
+    interactiveMediaType: null,
+    attributes: [],
+    hasMedia: true,
+    hasDownloadableMedia: true
+  };
+}
+
+function classifyDirectMediaContentType(
+  contentType: string | null
+): "image" | "animation" | "audio" | null {
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+
+  if (normalized.startsWith("image/")) {
+    return "image";
+  }
+
+  if (normalized.startsWith("video/")) {
+    return "animation";
+  }
+
+  if (normalized.startsWith("audio/")) {
+    return "audio";
+  }
+
+  return null;
+}
+
 async function resolveMetadata(
   metadataUri: {
     chainId: number;
@@ -1764,7 +1823,7 @@ async function resolveMetadata(
     return null;
   }
 
-  const responseText = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri), {
+  const document = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri), {
     entityType: "token",
     chainId: metadataUri.chainId,
     contractAddress: metadataUri.contractAddress,
@@ -1772,6 +1831,18 @@ async function resolveMetadata(
     rawUri: metadataUri.rawUri,
     resolvedUri: metadataUri.resolvedUri
   });
+
+  // Some contracts point tokenURI straight at the artwork rather than at a metadata
+  // document. Parsing that as JSON fails on the file's first bytes, which is how it
+  // used to surface: 'Unexpected token "����Exif"'. Treat the
+  // response as the media it says it is instead.
+  const directMedia = buildDirectMediaMetadata(document);
+
+  if (directMedia) {
+    return directMedia;
+  }
+
+  const responseText = document.text;
   const parsedPayload = JSON.parse(responseText) as Record<string, unknown>;
   const imageReference =
     extractMetadataMediaReference(parsedPayload, [
@@ -1873,7 +1944,7 @@ async function resolveCollectionMetadata(
     return null;
   }
 
-  const responseText = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri), {
+  const { text: responseText } = await loadMetadataPayloadText(buildMetadataFetchCandidateUrls(metadataUri), {
     entityType: "collection",
     chainId: metadataUri.chainId,
     contractAddress: metadataUri.contractAddress,
@@ -1997,7 +2068,16 @@ type MetadataFetchFailure = {
   aborted: boolean;
 };
 
-async function loadMetadataPayloadText(metadataUris: string[], context: MetadataFetchContext): Promise<string> {
+type MetadataDocument = {
+  text: string;
+  contentType: string | null;
+  sourceUrl: string;
+};
+
+async function loadMetadataPayloadText(
+  metadataUris: string[],
+  context: MetadataFetchContext
+): Promise<MetadataDocument> {
   if (metadataUris.length === 0) {
     throw new Error("No metadata URI candidates were available.");
   }
@@ -2022,7 +2102,7 @@ async function loadMetadataPayloadText(metadataUris: string[], context: Metadata
           throw new Error("Metadata payload exceeds the 1 MB safety limit.");
         }
 
-        return inlineMetadata;
+        return { text: inlineMetadata, contentType: null, sourceUrl: metadataUri };
       }
 
       await assertSafeRemoteUrl(metadataUri);
@@ -2058,7 +2138,11 @@ async function loadMetadataPayloadText(metadataUris: string[], context: Metadata
           throw new Error("Metadata payload exceeds the 1 MB safety limit.");
         }
 
-        return responseText;
+        return {
+          text: responseText,
+          contentType: response.headers.get("content-type"),
+          sourceUrl: metadataUri
+        };
       } finally {
         clearTimeout(timeout);
       }
