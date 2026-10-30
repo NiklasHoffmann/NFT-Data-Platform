@@ -1399,12 +1399,16 @@ export async function listTokenPage(params: {
   pageSize: number;
   chainId?: number;
   contractAddress?: string;
+  excludeUnfetchableMetadata?: boolean;
 }): Promise<TokenPage> {
   const pageSize = Math.max(1, Math.trunc(params.pageSize));
-  const query = buildTokenFilterQuery({
+  const baseQuery = buildTokenFilterQuery({
     ...(params.chainId !== undefined ? { chainId: params.chainId } : {}),
     ...(params.contractAddress ? { contractAddress: params.contractAddress } : {})
   });
+  const query: Filter<TokenDocument> = params.excludeUnfetchableMetadata
+    ? { ...baseQuery, $nor: [permanentlyUnfetchableMetadataFilter] }
+    : baseQuery;
   const collection = getMongoCollections(params.database).tokens;
   const total = await collection.countDocuments(query);
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -2230,6 +2234,30 @@ export function isTerminalMetadataError(message: string | null | undefined): boo
 
   return terminalMetadataErrorPatterns.some((pattern) => pattern.test(message));
 }
+
+/**
+ * Tokens whose metadata will not arrive however often they are refreshed: either the
+ * contract names no URI at all, or the source behind it is gone for good. Used by the
+ * archive view to take them out of sight without taking them out of the read model.
+ */
+const permanentlyUnfetchableMetadataFilter: Filter<TokenDocument> = {
+  $and: [
+    missingMetadataStatusFilter,
+    {
+      $or: [
+        {
+          metadataUriRaw: { $not: { $type: "string" } },
+          metadataUriResolved: { $not: { $type: "string" } }
+        },
+        {
+          lastMetadataError: {
+            $in: terminalMetadataErrorPatterns.map((pattern) => new RegExp(pattern))
+          }
+        }
+      ]
+    }
+  ]
+};
 
 const deadMetadataSourceFilter: Filter<TokenDocument> = {
   lastMetadataError: { $in: terminalMetadataErrorPatterns.map((pattern) => new RegExp(pattern)) }

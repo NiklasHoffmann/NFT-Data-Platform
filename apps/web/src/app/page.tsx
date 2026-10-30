@@ -52,6 +52,7 @@ const homeQuerySchema = z.object({
   tokenId: evmTokenIdSchema.optional(),
   view: homeViewSchema.optional(),
   page: z.coerce.number().int().positive().optional(),
+  hideUnfetchable: z.literal("1").optional(),
   status: z.enum(["loaded", "queued", "invalid", "not-found", "unresolved", "failed"]).optional(),
   message: z.string().trim().min(1).optional()
 });
@@ -97,6 +98,7 @@ export default async function HomePage(props: {
     tokenId: firstValue(rawSearchParams?.tokenId),
     view: firstValue(rawSearchParams?.view),
     page: firstValue(rawSearchParams?.page),
+    hideUnfetchable: firstValue(rawSearchParams?.hideUnfetchable),
     status: firstValue(rawSearchParams?.status),
     message: firstValue(rawSearchParams?.message)
   });
@@ -111,6 +113,7 @@ export default async function HomePage(props: {
   const shouldLoadIdentityData = parsedQuery.success && Boolean(parsedQuery.data.contractAddress);
   const shouldLoadOperationsHealth = activeView === "operations";
   const shouldLoadDiscoveredTokens = activeView === "tokens";
+  const hidesUnfetchableTokens = parsedQuery.success && parsedQuery.data.hideUnfetchable === "1";
   const shouldLoadHomepageTokenPreviews = activeView === "nft" && !initialContractAddress && !initialTokenId;
   const database =
     shouldLoadIdentityData || shouldLoadOperationsHealth || shouldLoadHomepageTokenPreviews || shouldLoadDiscoveredTokens
@@ -151,7 +154,8 @@ export default async function HomePage(props: {
       const tokenPage = await listTokenPage({
         database,
         page: parsedQuery.success ? parsedQuery.data.page ?? 1 : 1,
-        pageSize: discoveredTokensPageSize
+        pageSize: discoveredTokensPageSize,
+        excludeUnfetchableMetadata: hidesUnfetchableTokens
       });
       discoveredTokenCards = await buildTokenCardData(database, tokenPage.items);
       discoveredTokenPage = {
@@ -1146,11 +1150,33 @@ export default async function HomePage(props: {
               </p>
             ) : (
               <>
+                {/*
+                  A GET form rather than a link styled as a checkbox: the control is a
+                  real checkbox, works without JavaScript, and leaves every filtered
+                  page as a shareable URL.
+                */}
+                <form method="get" className="token-filter">
+                  <input type="hidden" name="view" value="tokens" />
+                  <label className="token-filter__option">
+                    <input
+                      type="checkbox"
+                      name="hideUnfetchable"
+                      value="1"
+                      defaultChecked={hidesUnfetchableTokens}
+                    />
+                    <span>Tokens ohne erreichbare Metadaten ausblenden</span>
+                  </label>
+                  <button type="submit" className="detail-link">
+                    Anwenden
+                  </button>
+                </form>
+
                 <dl className="metadata-grid">
                   <div>
                     <dt className="meta-label">Indexierte Tokens</dt>
                     <dd>
                       <strong>{discoveredTokenPage.total}</strong>
+                      {hidesUnfetchableTokens ? <span className="meta-note"> (gefiltert)</span> : null}
                     </dd>
                   </div>
                   <div>
@@ -1180,7 +1206,9 @@ export default async function HomePage(props: {
                 <TokenPagination
                   page={discoveredTokenPage.page}
                   pageCount={discoveredTokenPage.pageCount}
-                  hrefForPage={(page) => buildHomeHref({ view: "tokens", page })}
+                  hrefForPage={(page) =>
+                    buildHomeHref({ view: "tokens", page, hideUnfetchable: hidesUnfetchableTokens })
+                  }
                   label="Token-Seiten"
                 />
               </>
@@ -2998,6 +3026,7 @@ function buildHomeHref(params: {
   message?: string;
   view?: HomeView;
   page?: number;
+  hideUnfetchable?: boolean;
 }): string {
   const searchParams = new URLSearchParams();
 
@@ -3019,6 +3048,10 @@ function buildHomeHref(params: {
 
   if (params.page && params.page > 1) {
     searchParams.set("page", String(params.page));
+  }
+
+  if (params.hideUnfetchable) {
+    searchParams.set("hideUnfetchable", "1");
   }
 
   if (params.status) {
