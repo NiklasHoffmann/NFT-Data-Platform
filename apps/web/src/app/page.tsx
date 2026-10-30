@@ -75,11 +75,13 @@ const emptyOperationsHealth: OperationsHealthSnapshot = {
     failedJobsCount: 0,
     laggingCollectionsCount: 0,
     pendingMediaMirrorCount: 0,
-    pendingMetadataCount: 0
+    pendingMetadataCount: 0,
+    tokensWithoutMetadataUriCount: 0
   },
   activeJobs: [],
   retryingMediaJobs: [],
   recentFailedJobs: [],
+  indexingLagCollections: [],
   laggingCollections: []
 };
 
@@ -1284,6 +1286,10 @@ export default async function HomePage(props: {
                 <span className="meta-label">Tokens ohne Metadaten</span>
                 <strong>{operationsHealth.summary.pendingMetadataCount}</strong>
               </div>
+              <div>
+                <span className="meta-label">Ohne Metadaten-URI (nicht reparierbar)</span>
+                <strong>{operationsHealth.summary.tokensWithoutMetadataUriCount}</strong>
+              </div>
             </div>
 
             <section className="subsection-card">
@@ -1293,6 +1299,8 @@ export default async function HomePage(props: {
                 — pro Klick bis zu {metadataRepairBatchSize}. Erst dadurch entsteht überhaupt
                 eine Medien-URL, der Worker hängt den Medien-Refresh danach selbst an. Diese
                 Tokens tauchen im Zähler darunter also erst auf, wenn das hier durch ist.
+                Tokens, deren Contract gar keine tokenURI liefert, sind hier bewusst nicht
+                mitgezählt — die stehen im Zähler daneben, weil kein Refresh sie je ändert.
               </p>
               <form action="/repair-metadata" method="post">
                 <button
@@ -1341,6 +1349,58 @@ export default async function HomePage(props: {
                 </button>
               </form>
             </section>
+
+            {operationsHealth.indexingLagCollections.length > 0 ? (
+              <section className="subsection-card">
+                <h3>Indexer-Rückstand</h3>
+                <p className="empty-state">
+                  Liegt der Checkpoint weit genug hinter dem Head, wird jede Bereichsabfrage zur
+                  Archiv-Anfrage, und ein öffentlicher RPC lehnt die ab. Vorspulen setzt den
+                  Checkpoint auf den bereits beobachteten Head: der Indexer kommt wieder voran,
+                  die übersprungenen Transfers werden aber nicht gelesen. Nachholbar später mit
+                  einem RPC, der Archivzugriff hat.
+                </p>
+                <ul className="indexing-lag-list">
+                  {operationsHealth.indexingLagCollections.map((entry) => (
+                    <li key={`${entry.chainId}:${entry.contractAddress}`} className="indexing-lag-item">
+                      <dl className="detail-list">
+                        <div>
+                          <dt>Collection</dt>
+                          <dd>{entry.name ?? entry.contractAddress}</dd>
+                        </div>
+                        <div>
+                          <dt>Chain</dt>
+                          <dd>
+                            {entry.chainId} · {entry.standard}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Checkpoint</dt>
+                          <dd>{entry.lastIndexedBlock ?? "nie indexiert"}</dd>
+                        </div>
+                        <div>
+                          <dt>Beobachteter Head</dt>
+                          <dd>{entry.lastObservedBlock}</dd>
+                        </div>
+                        <div>
+                          <dt>Rückstand</dt>
+                          <dd>
+                            <strong>{entry.lagBlocks}</strong> Blöcke
+                          </dd>
+                        </div>
+                      </dl>
+                      <form action="/fast-forward-indexing" method="post">
+                        <input type="hidden" name="chainId" value={String(entry.chainId)} />
+                        <input type="hidden" name="contractAddress" value={entry.contractAddress} />
+                        <button type="submit" className="detail-link">
+                          {entry.lagBlocks} Blöcke überspringen
+                        </button>
+                      </form>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
 
             <section className="subsection-card">
               <h3>Live queue jobs</h3>
