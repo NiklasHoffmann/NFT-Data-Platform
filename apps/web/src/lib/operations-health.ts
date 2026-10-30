@@ -4,6 +4,7 @@ import { queueNames, type QueueName } from "@nft-platform/queue";
 import {
   countTokensPendingMediaMirror,
   countTokensPendingMetadata,
+  countTokensWithDeadMetadataSource,
   countTokensWithoutMetadataUri,
   listCollectionsWithIndexingLag,
   listMetadataErrorGroups,
@@ -32,6 +33,7 @@ export type OperationsHealthSnapshot = {
     pendingMediaMirrorCount: number;
     pendingMetadataCount: number;
     tokensWithoutMetadataUriCount: number;
+    deadMetadataSourceCount: number;
   };
   activeJobs: SerializedJob[];
   retryingMediaJobs: SerializedJob[];
@@ -64,7 +66,8 @@ export async function loadOperationsHealth(
     pendingMetadataCount,
     indexingLagCollections,
     tokensWithoutMetadataUriCount,
-    metadataErrorGroups
+    metadataErrorGroups,
+    deadMetadataSourceCount
   ] = await Promise.all([
     collections.jobs
       .find({ status: "failed" })
@@ -81,7 +84,8 @@ export async function loadOperationsHealth(
     countTokensPendingMetadata({ database }),
     listCollectionsWithIndexingLag({ database, limit: 6 }),
     countTokensWithoutMetadataUri({ database }),
-    listMetadataErrorGroups({ database, limit: 5 })
+    listMetadataErrorGroups({ database, limit: 5 }),
+    countTokensWithDeadMetadataSource({ database })
   ]);
 
   return {
@@ -92,7 +96,8 @@ export async function loadOperationsHealth(
       laggingCollectionsCount,
       pendingMediaMirrorCount,
       pendingMetadataCount,
-      tokensWithoutMetadataUriCount
+      tokensWithoutMetadataUriCount,
+      deadMetadataSourceCount
     },
     activeJobs: liveActiveJobs.slice(0, 8).map(serializeJobDocument),
     retryingMediaJobs: retryingMediaJobs.slice(0, 6).map(serializeJobDocument),

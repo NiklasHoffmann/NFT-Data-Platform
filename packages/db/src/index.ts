@@ -2205,10 +2205,67 @@ const hasMetadataUriFilter: Filter<TokenDocument> = {
   $or: [{ metadataUriRaw: { $type: "string" } }, { metadataUriResolved: { $type: "string" } }]
 };
 
+/**
+ * Failures that will not come out differently on a retry: the document is gone, or
+ * the host serving it no longer exists.
+ *
+ * Classified from the recorded message rather than from a stored flag, so the
+ * judgement applies to tokens that already failed instead of only to ones refreshed
+ * after this shipped. A 404 could in principle turn into a 200 again, which is why
+ * these tokens stay queryable and keep a way to be retried on demand -- they are
+ * moved out of the repair backlog, not written off.
+ */
+export const terminalMetadataErrorPatterns = [
+  /failed with status 404\./i,
+  /failed with status 410\./i,
+  /host could not be resolved/i,
+  /Unsupported metadata URI/i,
+  /blocked private or loopback/i
+] as const;
+
+export function isTerminalMetadataError(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+
+  return terminalMetadataErrorPatterns.some((pattern) => pattern.test(message));
+}
+
+const deadMetadataSourceFilter: Filter<TokenDocument> = {
+  lastMetadataError: { $in: terminalMetadataErrorPatterns.map((pattern) => new RegExp(pattern)) }
+};
+
 const pendingMetadataFilter: Filter<TokenDocument> = {
   ...missingMetadataStatusFilter,
-  ...hasMetadataUriFilter
+  ...hasMetadataUriFilter,
+  $nor: [deadMetadataSourceFilter]
 };
+
+/**
+ * Tokens whose metadata source is gone for good. Counted separately so the repair
+ * backlog can reach zero and still account for every token.
+ */
+export async function countTokensWithDeadMetadataSource(params: { database: Db }): Promise<number> {
+  return getMongoCollections(params.database).tokens.countDocuments({
+    ...missingMetadataStatusFilter,
+    ...hasMetadataUriFilter,
+    ...deadMetadataSourceFilter
+  });
+}
+
+export async function listTokenIdentitiesWithDeadMetadataSource(params: {
+  database: Db;
+  limit: number;
+}): Promise<TokenMediaMirrorIdentity[]> {
+  return getMongoCollections(params.database)
+    .tokens.find<TokenMediaMirrorIdentity>(
+      { ...missingMetadataStatusFilter, ...hasMetadataUriFilter, ...deadMetadataSourceFilter },
+      { projection: { _id: 0, chainId: 1, contractAddress: 1, tokenId: 1 } }
+    )
+    .sort({ lastMetadataFetchAt: 1, _id: 1 })
+    .limit(params.limit)
+    .toArray();
+}
 
 /**
  * The other half: tokens that will never have metadata because their contract does

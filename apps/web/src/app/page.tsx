@@ -76,7 +76,8 @@ const emptyOperationsHealth: OperationsHealthSnapshot = {
     laggingCollectionsCount: 0,
     pendingMediaMirrorCount: 0,
     pendingMetadataCount: 0,
-    tokensWithoutMetadataUriCount: 0
+    tokensWithoutMetadataUriCount: 0,
+    deadMetadataSourceCount: 0
   },
   activeJobs: [],
   retryingMediaJobs: [],
@@ -1291,6 +1292,10 @@ export default async function HomePage(props: {
                 <span className="meta-label">Ohne Metadaten-URI (nicht reparierbar)</span>
                 <strong>{operationsHealth.summary.tokensWithoutMetadataUriCount}</strong>
               </div>
+              <div>
+                <span className="meta-label">Tote Metadaten-Quelle</span>
+                <strong>{operationsHealth.summary.deadMetadataSourceCount}</strong>
+              </div>
             </div>
 
             <section className="subsection-card">
@@ -1302,6 +1307,8 @@ export default async function HomePage(props: {
                 Tokens tauchen im Zähler darunter also erst auf, wenn das hier durch ist.
                 Tokens, deren Contract gar keine tokenURI liefert, sind hier bewusst nicht
                 mitgezählt — die stehen im Zähler daneben, weil kein Refresh sie je ändert.
+                Ebenso ausgenommen: Tokens, deren Quelle endgültig weg ist (404, 410, Host
+                nicht auflösbar). Dieser Zähler kann damit tatsächlich null erreichen.
               </p>
               <form action="/repair-metadata" method="post">
                 <button
@@ -1319,6 +1326,23 @@ export default async function HomePage(props: {
                       : "Nächste Tokens einreihen"}
                 </button>
               </form>
+
+              {operationsHealth.summary.deadMetadataSourceCount > 0 ? (
+                <>
+                  <p className="empty-state">
+                    {operationsHealth.summary.deadMetadataSourceCount} Tokens sind als tote Quelle
+                    eingestuft und bleiben aus dem Rückstand heraus. Sie sind weiterhin über die
+                    API auffindbar und gehören weiterhin ihren Besitzern — gelöscht wird nichts.
+                    Ein 404 kann theoretisch zurückkommen, deshalb bleibt dieser Weg offen.
+                  </p>
+                  <form action="/repair-metadata" method="post">
+                    <input type="hidden" name="includeDeadSources" value="true" />
+                    <button type="submit" className="detail-link" disabled={Boolean(operationsHealthWarning)}>
+                      Tote Quellen trotzdem erneut versuchen
+                    </button>
+                  </form>
+                </>
+              ) : null}
             </section>
 
             {operationsHealth.metadataErrorGroups.length > 0 ? (
