@@ -2002,6 +2002,12 @@ async function loadMetadataPayloadText(metadataUris: string[], context: Metadata
     throw new Error("No metadata URI candidates were available.");
   }
 
+  // The first candidate is what the contract actually named; the ones after it are
+  // gateway fallbacks this code appends. Reporting the last failure therefore
+  // described a synthetic retry rather than the real source -- and since a fallback
+  // built from a non-CID identifier is answered with 400 by every gateway, the stored
+  // reason was frequently that 400 instead of whatever truly went wrong.
+  let firstError: Error | null = null;
   let lastError: Error | null = null;
 
   for (const [index, metadataUri] of metadataUris.entries()) {
@@ -2071,11 +2077,36 @@ async function loadMetadataPayloadText(metadataUris: string[], context: Metadata
         failure
       });
 
+      firstError ??= failure.error;
       lastError = failure.error;
     }
   }
 
-  throw lastError ?? new Error("Metadata payload could not be fetched from any candidate URI.");
+  throw buildMetadataFetchError({
+    firstError,
+    lastError,
+    candidateCount: metadataUris.length
+  });
+}
+
+export function buildMetadataFetchError(params: {
+  firstError: Error | null;
+  lastError: Error | null;
+  candidateCount: number;
+}): Error {
+  const reported = params.firstError ?? params.lastError;
+
+  if (!reported) {
+    return new Error("Metadata payload could not be fetched from any candidate URI.");
+  }
+
+  if (params.candidateCount < 2) {
+    return reported;
+  }
+
+  // Naming the count keeps the message honest: the gateways were tried and also
+  // failed, the reason shown is simply the one from the source itself.
+  return new Error(`${reported.message} (${params.candidateCount} candidates tried)`);
 }
 
 function normalizeMetadataFetchFailure(params: {
