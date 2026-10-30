@@ -4,6 +4,9 @@ import { queueNames, type QueueName } from "@nft-platform/queue";
 import {
   countTokensPendingMediaMirror,
   countTokensPendingMetadata,
+  countTokensWithoutMetadataUri,
+  listCollectionsWithIndexingLag,
+  type IndexingLagCollection,
   getMongoCollections,
   serializeCollectionDocument,
   serializeJobDocument,
@@ -26,10 +29,12 @@ export type OperationsHealthSnapshot = {
     laggingCollectionsCount: number;
     pendingMediaMirrorCount: number;
     pendingMetadataCount: number;
+    tokensWithoutMetadataUriCount: number;
   };
   activeJobs: SerializedJob[];
   retryingMediaJobs: SerializedJob[];
   recentFailedJobs: SerializedJob[];
+  indexingLagCollections: IndexingLagCollection[];
   laggingCollections: Array<
     ReturnType<typeof serializeCollectionDocument> & {
       lagBlocks: number;
@@ -53,7 +58,9 @@ export async function loadOperationsHealth(
     failedJobsCount,
     laggingCollectionsCount,
     pendingMediaMirrorCount,
-    pendingMetadataCount
+    pendingMetadataCount,
+    indexingLagCollections,
+    tokensWithoutMetadataUriCount
   ] = await Promise.all([
     collections.jobs
       .find({ status: "failed" })
@@ -67,7 +74,9 @@ export async function loadOperationsHealth(
       database,
       currentPublicBaseUrl: params.currentMediaPublicBaseUrl
     }),
-    countTokensPendingMetadata({ database })
+    countTokensPendingMetadata({ database }),
+    listCollectionsWithIndexingLag({ database, limit: 6 }),
+    countTokensWithoutMetadataUri({ database })
   ]);
 
   return {
@@ -77,11 +86,13 @@ export async function loadOperationsHealth(
       failedJobsCount,
       laggingCollectionsCount,
       pendingMediaMirrorCount,
-      pendingMetadataCount
+      pendingMetadataCount,
+      tokensWithoutMetadataUriCount
     },
     activeJobs: liveActiveJobs.slice(0, 8).map(serializeJobDocument),
     retryingMediaJobs: retryingMediaJobs.slice(0, 6).map(serializeJobDocument),
     recentFailedJobs: recentFailedJobs.map(serializeJobDocument),
+    indexingLagCollections,
     laggingCollections
   };
 }

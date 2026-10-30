@@ -2190,9 +2190,147 @@ export async function countTokensPendingMediaMirror(params: {
  * "stale" is deliberately excluded: that metadata did load once and merely aged out,
  * which is the sweep's job rather than a repair action.
  */
-const pendingMetadataFilter: Filter<TokenDocument> = {
+const missingMetadataStatusFilter: Filter<TokenDocument> = {
   metadataStatus: { $in: ["pending", "failed"] }
 };
+
+/**
+ * A contract that returns no tokenURI leaves resolveMetadata with nothing to fetch.
+ * That is not an error, so the job succeeds, no metadataError is recorded, and the
+ * token keeps its "pending" status forever. Counting those as repairable made the
+ * counter stick at a number no amount of refreshing could move, so the repair list
+ * requires a URI to actually exist.
+ */
+const hasMetadataUriFilter: Filter<TokenDocument> = {
+  $or: [{ metadataUriRaw: { $type: "string" } }, { metadataUriResolved: { $type: "string" } }]
+};
+
+const pendingMetadataFilter: Filter<TokenDocument> = {
+  ...missingMetadataStatusFilter,
+  ...hasMetadataUriFilter
+};
+
+/**
+ * The other half: tokens that will never have metadata because their contract does
+ * not expose a URI for them. Surfaced separately so the figure is visible as a fact
+ * about those contracts rather than disappearing from the operator's view.
+ */
+export async function countTokensWithoutMetadataUri(params: { database: Db }): Promise<number> {
+  return getMongoCollections(params.database).tokens.countDocuments({
+    ...missingMetadataStatusFilter,
+    metadataUriRaw: { $not: { $type: "string" } },
+    metadataUriResolved: { $not: { $type: "string" } }
+  });
+}
+
+export type IndexingLagCollection = {
+  chainId: number;
+  contractAddress: string;
+  standard: NftStandard;
+  name: string | null;
+  lastIndexedBlock: number | null;
+  lastObservedBlock: number | null;
+  lagBlocks: number;
+};
+
+/**
+ * Collections whose indexer checkpoint trails the head, any standard. Separate from
+ * the ERC-1155 lag panel, which answers a different question: this one exists so an
+ * operator can see a checkpoint that is too far behind for the configured RPC to
+ * serve, and act on it.
+ */
+export async function listCollectionsWithIndexingLag(params: {
+  database: Db;
+  limit: number;
+}): Promise<IndexingLagCollection[]> {
+  return getMongoCollections(params.database)
+    .collections.aggregate<IndexingLagCollection>([
+      { $match: { lastObservedBlock: { $type: "number" } } },
+      {
+        $addFields: {
+          lagBlocks: {
+            $max: [
+              {
+                $subtract: [
+                  "$lastObservedBlock",
+                  { $ifNull: ["$lastIndexedBlock", { $ifNull: ["$deployBlock", 0] }] }
+                ]
+              },
+              0
+            ]
+          }
+        }
+      },
+      { $match: { lagBlocks: { $gt: 0 } } },
+      { $sort: { lagBlocks: -1, _id: 1 } },
+      { $limit: params.limit },
+      {
+        $project: {
+          _id: 0,
+          chainId: 1,
+          contractAddress: 1,
+          standard: 1,
+          name: 1,
+          lastIndexedBlock: 1,
+          lastObservedBlock: 1,
+          lagBlocks: 1
+        }
+      }
+    ])
+    .toArray();
+}
+
+/**
+ * Moves a collection's indexer checkpoint up to the head it has already observed,
+ * abandoning the blocks in between. The guard against moving backwards matters: the
+ * checkpoint is what keeps the indexer from re-reading ranges it has already paid
+ * for, so lowering it would be worse than the lag it is meant to cure.
+ */
+export async function fastForwardCollectionIndexing(params: {
+  database: Db;
+  chainId: number;
+  contractAddress: string;
+}): Promise<
+  | { outcome: "moved"; skippedFrom: number | null; skippedTo: number; skippedBlocks: number }
+  | { outcome: "unknown-collection" }
+  | { outcome: "already-current" }
+> {
+  const contractAddress = normalizeContractAddress(params.contractAddress);
+  const collection = await getMongoCollections(params.database).collections.findOne({
+    chainId: params.chainId,
+    contractAddress
+  });
+
+  // Told apart on purpose: "this contract is not indexed here" and "its checkpoint is
+  // already at the head" are different answers, and reporting both as the latter sent
+  // an operator looking for a problem that was never there.
+  if (!collection) {
+    return { outcome: "unknown-collection" };
+  }
+
+  if (typeof collection.lastObservedBlock !== "number") {
+    return { outcome: "already-current" };
+  }
+
+  const target = collection.lastObservedBlock;
+  const current = collection.lastIndexedBlock ?? null;
+
+  if (current !== null && current >= target) {
+    return { outcome: "already-current" };
+  }
+
+  await getMongoCollections(params.database).collections.updateOne(
+    { chainId: params.chainId, contractAddress },
+    { $set: { lastIndexedBlock: target, updatedAt: new Date() } }
+  );
+
+  return {
+    outcome: "moved",
+    skippedFrom: current === null ? collection.deployBlock : current + 1,
+    skippedTo: target,
+    skippedBlocks: target - (current ?? collection.deployBlock ?? target)
+  };
+}
 
 export async function countTokensPendingMetadata(params: { database: Db }): Promise<number> {
   return getMongoCollections(params.database).tokens.countDocuments(pendingMetadataFilter);
