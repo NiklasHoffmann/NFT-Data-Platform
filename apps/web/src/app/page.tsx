@@ -1166,6 +1166,11 @@ export default async function HomePage(props: {
                     />
                     <span>Tokens ohne erreichbare Metadaten ausblenden</span>
                   </label>
+                  <span className="meta-note">
+                    Blendet alles aus, dessen Metadaten nicht geladen werden konnten — auch
+                    vorübergehende Fälle wie Drosselung. Die kommen zurück, sobald ein Refresh
+                    durchgeht.
+                  </span>
                   <button type="submit" className="detail-link">
                     Anwenden
                   </button>
