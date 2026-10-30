@@ -82,6 +82,7 @@ const emptyOperationsHealth: OperationsHealthSnapshot = {
   retryingMediaJobs: [],
   recentFailedJobs: [],
   indexingLagCollections: [],
+  metadataErrorGroups: [],
   laggingCollections: []
 };
 
@@ -1320,6 +1321,39 @@ export default async function HomePage(props: {
               </form>
             </section>
 
+            {operationsHealth.metadataErrorGroups.length > 0 ? (
+              <section className="subsection-card">
+                <h3>Warum Metadaten scheitern</h3>
+                <p className="empty-state">
+                  Ein fehlgeschlagener Metadaten-Abruf wird festgehalten statt geworfen, der Job
+                  gilt also als erfolgreich und taucht nicht unter &bdquo;Failed jobs&ldquo; auf. Hier stehen
+                  die häufigsten Gründe, damit du nicht Token für Token nachsehen musst.
+                </p>
+                <ul className="metadata-error-list">
+                  {operationsHealth.metadataErrorGroups.map((group) => (
+                    <li key={group.message} className="metadata-error-item">
+                      <div className="metadata-error-item__head">
+                        <strong>{group.tokenCount}</strong>
+                        <span>{group.tokenCount === 1 ? "Token" : "Tokens"}</span>
+                      </div>
+                      <p className="metadata-error-item__message">{group.message}</p>
+                      <a
+                        href={buildHomeHref({
+                          chainId: group.sampleChainId,
+                          contractAddress: group.sampleContractAddress,
+                          tokenId: group.sampleTokenId,
+                          view: "nft"
+                        })}
+                        className="detail-link"
+                      >
+                        Beispiel-Token ansehen
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
             <section className="subsection-card">
               <h3>Medien spiegeln</h3>
               <p className="empty-state">
@@ -1643,9 +1677,17 @@ function renderCollectionTokenCard(params: {
           <dt>Media status</dt>
           <dd>{collectionToken.mediaStatus}</dd>
         </div>
+        {collectionToken.token.lastMetadataError ? (
+          <div>
+            <dt>Metadaten-Fehler</dt>
+            <dd className="collection-token-card__failure-reason">
+              {collectionToken.token.lastMetadataError}
+            </dd>
+          </div>
+        ) : null}
         {mediaFailureReason ? (
           <div>
-            <dt>Grund</dt>
+            <dt>Medien-Grund</dt>
             <dd className="collection-token-card__failure-reason">{mediaFailureReason}</dd>
           </div>
         ) : null}

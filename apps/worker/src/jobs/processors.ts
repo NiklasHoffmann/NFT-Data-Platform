@@ -76,7 +76,18 @@ type JobProcessingContext = {
   mediaFetchTimeoutMs: number;
 };
 
-const METADATA_FETCH_TIMEOUT_MS = 10_000;
+const DEFAULT_METADATA_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Set from configuration at worker start. A module-level value because the metadata
+ * fetch sits several layers below the job context, and threading it through every
+ * caller would touch far more than the one place that needs it.
+ */
+let metadataFetchTimeoutMs = DEFAULT_METADATA_FETCH_TIMEOUT_MS;
+
+export function configureMetadataFetchTimeout(timeoutMs: number): void {
+  metadataFetchTimeoutMs = timeoutMs > 0 ? timeoutMs : DEFAULT_METADATA_FETCH_TIMEOUT_MS;
+}
 const MAX_METADATA_PAYLOAD_BYTES = 1_000_000;
 
 export async function processQueueJob(params: {
@@ -2012,8 +2023,8 @@ async function loadMetadataPayloadText(metadataUris: string[], context: Metadata
       const controller = new AbortController();
       const timeout = setTimeout(() => {
         timedOut = true;
-        controller.abort(new Error(`Metadata request timed out after ${METADATA_FETCH_TIMEOUT_MS} ms.`));
-      }, METADATA_FETCH_TIMEOUT_MS);
+        controller.abort(new Error(`Metadata request timed out after ${metadataFetchTimeoutMs} ms.`));
+      }, metadataFetchTimeoutMs);
 
       try {
         const response = await fetch(metadataUri, {
@@ -2076,7 +2087,7 @@ function normalizeMetadataFetchFailure(params: {
 
   if (params.timedOut) {
     return {
-      error: new Error(`Metadata request timed out after ${METADATA_FETCH_TIMEOUT_MS} ms.`),
+      error: new Error(`Metadata request timed out after ${metadataFetchTimeoutMs} ms.`),
       durationMs: params.durationMs,
       timedOut: true,
       aborted: true

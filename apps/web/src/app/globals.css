@@ -1949,3 +1949,49 @@ ul {
 .indexing-lag-item .detail-list {
   margin: 0;
 }
+
+.metadata-error-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.metadata-error-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(12, 24, 38, 0.45);
+}
+
+.metadata-error-item__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.metadata-error-item__head strong {
+  font-size: 1.25rem;
+  color: var(--accent-warm);
+}
+
+.metadata-error-item__head span {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* Error text runs long and often carries a URL, so it has to wrap inside the card
+   rather than widen it. */
+.metadata-error-item__message {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.metadata-error-item .detail-link {
+  justify-self: start;
+}

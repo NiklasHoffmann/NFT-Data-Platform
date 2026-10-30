@@ -2215,6 +2215,56 @@ const pendingMetadataFilter: Filter<TokenDocument> = {
  * not expose a URI for them. Surfaced separately so the figure is visible as a fact
  * about those contracts rather than disappearing from the operator's view.
  */
+export type MetadataErrorGroup = {
+  message: string;
+  tokenCount: number;
+  sampleContractAddress: string;
+  sampleChainId: number;
+  sampleTokenId: string;
+};
+
+/**
+ * The most common reasons metadata did not load, with one token each to look at.
+ *
+ * A failed metadata fetch is caught and recorded rather than thrown, so the job
+ * succeeds and the failed-jobs list stays empty while the repair counter refuses to
+ * move. Without this grouping the only way to learn why was to open tokens one at a
+ * time.
+ */
+export async function listMetadataErrorGroups(params: {
+  database: Db;
+  limit: number;
+}): Promise<MetadataErrorGroup[]> {
+  return getMongoCollections(params.database)
+    .tokens.aggregate<MetadataErrorGroup>([
+      { $match: { metadataStatus: "failed", lastMetadataError: { $type: "string" } } },
+      {
+        $group: {
+          // Truncated so messages that differ only in a URL or token id still group
+          // together; the sample carries the full detail.
+          _id: { $substrBytes: ["$lastMetadataError", 0, 120] },
+          tokenCount: { $sum: 1 },
+          sampleContractAddress: { $first: "$contractAddress" },
+          sampleChainId: { $first: "$chainId" },
+          sampleTokenId: { $first: "$tokenId" }
+        }
+      },
+      { $sort: { tokenCount: -1, _id: 1 } },
+      { $limit: params.limit },
+      {
+        $project: {
+          _id: 0,
+          message: "$_id",
+          tokenCount: 1,
+          sampleContractAddress: 1,
+          sampleChainId: 1,
+          sampleTokenId: 1
+        }
+      }
+    ])
+    .toArray();
+}
+
 export async function countTokensWithoutMetadataUri(params: { database: Db }): Promise<number> {
   return getMongoCollections(params.database).tokens.countDocuments({
     ...missingMetadataStatusFilter,

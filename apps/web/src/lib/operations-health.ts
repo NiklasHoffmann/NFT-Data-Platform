@@ -6,6 +6,8 @@ import {
   countTokensPendingMetadata,
   countTokensWithoutMetadataUri,
   listCollectionsWithIndexingLag,
+  listMetadataErrorGroups,
+  type MetadataErrorGroup,
   type IndexingLagCollection,
   getMongoCollections,
   serializeCollectionDocument,
@@ -35,6 +37,7 @@ export type OperationsHealthSnapshot = {
   retryingMediaJobs: SerializedJob[];
   recentFailedJobs: SerializedJob[];
   indexingLagCollections: IndexingLagCollection[];
+  metadataErrorGroups: MetadataErrorGroup[];
   laggingCollections: Array<
     ReturnType<typeof serializeCollectionDocument> & {
       lagBlocks: number;
@@ -60,7 +63,8 @@ export async function loadOperationsHealth(
     pendingMediaMirrorCount,
     pendingMetadataCount,
     indexingLagCollections,
-    tokensWithoutMetadataUriCount
+    tokensWithoutMetadataUriCount,
+    metadataErrorGroups
   ] = await Promise.all([
     collections.jobs
       .find({ status: "failed" })
@@ -76,7 +80,8 @@ export async function loadOperationsHealth(
     }),
     countTokensPendingMetadata({ database }),
     listCollectionsWithIndexingLag({ database, limit: 6 }),
-    countTokensWithoutMetadataUri({ database })
+    countTokensWithoutMetadataUri({ database }),
+    listMetadataErrorGroups({ database, limit: 5 })
   ]);
 
   return {
@@ -93,6 +98,7 @@ export async function loadOperationsHealth(
     retryingMediaJobs: retryingMediaJobs.slice(0, 6).map(serializeJobDocument),
     recentFailedJobs: recentFailedJobs.map(serializeJobDocument),
     indexingLagCollections,
+    metadataErrorGroups,
     laggingCollections
   };
 }
