@@ -286,6 +286,7 @@ For exact UI-level setup fields and ordering, follow `docs/coolify-step-by-step.
 
 - `docs/architecture-plan.md` — architecture baseline and implementation direction
 - `docs/nft-api.md` — quickstart for the protected NFT API including list, detail, search, and discover flows
+- `docs/token-api-response.md` — the token response field by field, with the signing recipe and the media URLs a consuming service renders
 - `docs/wallet-api.md` — wallet inventory integration guide with the multi-chain endpoint, example response shape, and a server-side HMAC client snippet
 - `docs/wallet-application-requirements.md` — target architecture and implementation requirements for the separate wallet service
 - `docs/marketplace-application-requirements.md` — target architecture and implementation requirements for the separate marketplace service
