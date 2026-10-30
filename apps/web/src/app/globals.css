@@ -1995,3 +1995,34 @@ ul {
 .metadata-error-item .detail-link {
   justify-self: start;
 }
+
+.token-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.token-filter__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.token-filter__option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.token-filter__option input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.meta-note {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
