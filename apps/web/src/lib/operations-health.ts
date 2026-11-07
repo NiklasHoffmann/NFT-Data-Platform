@@ -11,10 +11,12 @@ import {
   type MetadataErrorGroup,
   type IndexingLagCollection,
   getMongoCollections,
+  listWorkerHeartbeats,
   serializeCollectionDocument,
   serializeJobDocument,
   type CollectionDocument,
-  type JobDocument
+  type JobDocument,
+  type WorkerHeartbeatDocument
 } from "@nft-platform/db";
 import { getRedisClient } from "./redis";
 
@@ -22,6 +24,25 @@ type SerializedJob = ReturnType<typeof serializeJobDocument>;
 const queueBackedJobTypes = new Set<QueueName>(Object.values(queueNames));
 const globalQueueRegistry = globalThis as typeof globalThis & {
   __nftPlatformOperationsQueues__?: Map<QueueName, Queue>;
+};
+
+/**
+ * A worker that has not reported within this window is treated as gone. The worker writes every
+ * 30 seconds, so this tolerates two missed writes before the view calls it stale.
+ */
+const workerStaleAfterSeconds = 120;
+
+export type WorkerHealth = {
+  instanceId: string;
+  startedAt: string;
+  lastSeenAt: string;
+  ageSeconds: number;
+  isStale: boolean;
+  chainIndexingEnabled: boolean;
+  chainIndexingPollIntervalMs: number;
+  chainIndexingAllowlistSize: number;
+  metadataSweepEnabled: boolean;
+  metadataSweepIntervalMs: number;
 };
 
 export type OperationsHealthSnapshot = {
@@ -34,7 +55,11 @@ export type OperationsHealthSnapshot = {
     pendingMetadataCount: number;
     tokensWithoutMetadataUriCount: number;
     deadMetadataSourceCount: number;
+    liveWorkerCount: number;
+    chainIndexingEnabled: boolean;
+    metadataSweepEnabled: boolean;
   };
+  workers: WorkerHealth[];
   activeJobs: SerializedJob[];
   retryingMediaJobs: SerializedJob[];
   recentFailedJobs: SerializedJob[];
@@ -56,6 +81,7 @@ export async function loadOperationsHealth(
   const collections = getMongoCollections(database);
   const liveActiveJobs = await listLiveQueueJobs(database);
   const retryingMediaJobs = liveActiveJobs.filter((job) => job.type === "refresh-media" && job.attempts > 1);
+  const now = new Date();
 
   const [
     recentFailedJobs,
@@ -67,7 +93,8 @@ export async function loadOperationsHealth(
     indexingLagCollections,
     tokensWithoutMetadataUriCount,
     metadataErrorGroups,
-    deadMetadataSourceCount
+    deadMetadataSourceCount,
+    workerHeartbeats
   ] = await Promise.all([
     collections.jobs
       .find({ status: "failed" })
@@ -85,8 +112,12 @@ export async function loadOperationsHealth(
     listCollectionsWithIndexingLag({ database, limit: 6 }),
     countTokensWithoutMetadataUri({ database }),
     listMetadataErrorGroups({ database, limit: 5 }),
-    countTokensWithDeadMetadataSource({ database })
+    countTokensWithDeadMetadataSource({ database }),
+    listWorkerHeartbeats({ database })
   ]);
+
+  const workers = workerHeartbeats.map((heartbeat) => buildWorkerHealth(heartbeat, now));
+  const liveWorkers = workers.filter((worker) => !worker.isStale);
 
   return {
     summary: {
@@ -97,14 +128,37 @@ export async function loadOperationsHealth(
       pendingMediaMirrorCount,
       pendingMetadataCount,
       tokensWithoutMetadataUriCount,
-      deadMetadataSourceCount
+      deadMetadataSourceCount,
+      liveWorkerCount: liveWorkers.length,
+      // Reported as "on" only while a worker that has it enabled is actually reporting. A switched-on
+      // flag on a worker that died says nothing about whether anything is being indexed right now.
+      chainIndexingEnabled: liveWorkers.some((worker) => worker.chainIndexingEnabled),
+      metadataSweepEnabled: liveWorkers.some((worker) => worker.metadataSweepEnabled)
     },
+    workers,
     activeJobs: liveActiveJobs.slice(0, 8).map(serializeJobDocument),
     retryingMediaJobs: retryingMediaJobs.slice(0, 6).map(serializeJobDocument),
     recentFailedJobs: recentFailedJobs.map(serializeJobDocument),
     indexingLagCollections,
     metadataErrorGroups,
     laggingCollections
+  };
+}
+
+function buildWorkerHealth(heartbeat: WorkerHeartbeatDocument, now: Date): WorkerHealth {
+  const ageSeconds = Math.max(0, Math.floor((now.getTime() - heartbeat.lastSeenAt.getTime()) / 1000));
+
+  return {
+    instanceId: heartbeat.instanceId,
+    startedAt: heartbeat.startedAt.toISOString(),
+    lastSeenAt: heartbeat.lastSeenAt.toISOString(),
+    ageSeconds,
+    isStale: ageSeconds > workerStaleAfterSeconds,
+    chainIndexingEnabled: heartbeat.chainIndexingEnabled,
+    chainIndexingPollIntervalMs: heartbeat.chainIndexingPollIntervalMs,
+    chainIndexingAllowlistSize: heartbeat.chainIndexingAllowlistSize,
+    metadataSweepEnabled: heartbeat.metadataSweepEnabled,
+    metadataSweepIntervalMs: heartbeat.metadataSweepIntervalMs
   };
 }
 

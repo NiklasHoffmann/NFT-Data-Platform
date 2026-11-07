@@ -3,6 +3,7 @@ import { reindexRangeJobSchema } from "@nft-platform/queue";
 import { withAuthenticatedRoute } from "../../../../lib/api-auth";
 import { buildApiErrorResponse, buildApiSuccessResponse } from "../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../lib/api-validation";
+import { guardCollectionNotDisabled } from "../../../../lib/collection-status-guard";
 import { guardContractAddress } from "../../../../lib/contract-address-guard";
 import { getWebMongoDatabase } from "../../../../lib/mongodb";
 import { enqueueReindexRangeJob } from "../../../../lib/queue";
@@ -38,6 +39,15 @@ const postHandler = withAuthenticatedRoute(["reindex:write"], async ({ auth }) =
       message: contractGuardResult.message,
       status: 400
     });
+  }
+
+  const disabledGuardResult = await guardCollectionNotDisabled({
+    chainId: validatedPayload.chainId,
+    contractAddress: validatedPayload.contractAddress
+  });
+
+  if (!disabledGuardResult.ok) {
+    return disabledGuardResult.response;
   }
 
   const timestamp = new Date();

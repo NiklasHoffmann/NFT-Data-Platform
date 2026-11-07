@@ -78,8 +78,12 @@ const emptyOperationsHealth: OperationsHealthSnapshot = {
     pendingMediaMirrorCount: 0,
     pendingMetadataCount: 0,
     tokensWithoutMetadataUriCount: 0,
-    deadMetadataSourceCount: 0
+    deadMetadataSourceCount: 0,
+    liveWorkerCount: 0,
+    chainIndexingEnabled: false,
+    metadataSweepEnabled: false
   },
+  workers: [],
   activeJobs: [],
   retryingMediaJobs: [],
   recentFailedJobs: [],
@@ -1329,6 +1333,18 @@ export default async function HomePage(props: {
                 <span className="meta-label">Tote Metadaten-Quelle</span>
                 <strong>{operationsHealth.summary.deadMetadataSourceCount}</strong>
               </div>
+              <div>
+                <span className="meta-label">Live workers</span>
+                <strong>{operationsHealth.summary.liveWorkerCount}</strong>
+              </div>
+              <div>
+                <span className="meta-label">Chain indexing</span>
+                <strong>{operationsHealth.summary.chainIndexingEnabled ? "on" : "off"}</strong>
+              </div>
+              <div>
+                <span className="meta-label">Metadata sweep</span>
+                <strong>{operationsHealth.summary.metadataSweepEnabled ? "on" : "off"}</strong>
+              </div>
             </div>
 
             <section className="subsection-card">
@@ -1492,6 +1508,45 @@ export default async function HomePage(props: {
                 </ul>
               </section>
             ) : null}
+
+            <section className="subsection-card">
+              <h3>Background workers</h3>
+              {operationsHealth.workers.length > 0 ? (
+                <div className="table-card">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Instance</th>
+                        <th>Last seen</th>
+                        <th>Chain indexing</th>
+                        <th>Metadata sweep</th>
+                        <th>Allowlist</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {operationsHealth.workers.map((worker) => (
+                        <tr key={worker.instanceId}>
+                          <td>{worker.instanceId.slice(0, 8)}</td>
+                          <td>{worker.isStale ? `${worker.ageSeconds}s ago (stale)` : `${worker.ageSeconds}s ago`}</td>
+                          <td>{worker.chainIndexingEnabled ? "on" : "off"}</td>
+                          <td>{worker.metadataSweepEnabled ? "on" : "off"}</td>
+                          <td>
+                            {worker.chainIndexingAllowlistSize > 0
+                              ? `${worker.chainIndexingAllowlistSize} collections`
+                              : "all collections"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="empty-state">
+                  No worker is reporting. Nothing is indexed automatically while this list is empty, and no
+                  request will fail because of it.
+                </p>
+              )}
+            </section>
 
             <section className="subsection-card">
               <h3>Live queue jobs</h3>

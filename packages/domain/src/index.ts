@@ -28,6 +28,7 @@ export const scopeSchema = z.enum([
   "refresh:collection",
   "refresh:media",
   "reindex:write",
+  "collections:write",
   "admin:read"
 ]);
 export type Scope = z.infer<typeof scopeSchema>;

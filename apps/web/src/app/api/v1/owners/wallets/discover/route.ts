@@ -10,6 +10,10 @@ import {
 } from "../../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../../lib/api-auth";
 import { serializeEnrichedCollections } from "../../../../../../lib/collection-response";
+import {
+  collectionDisabledMessage,
+  isDisabledCollection
+} from "../../../../../../lib/collection-status-guard";
 import { getWebMongoDatabase } from "../../../../../../lib/mongodb";
 import { enqueueRefreshTokenJob } from "../../../../../../lib/queue";
 import {
@@ -98,6 +102,25 @@ const postHandler = withAuthenticatedRoute(["owners:read", "refresh:token"], asy
         jobId: null,
         token,
         collection
+      };
+    }
+
+    // The worker skips every job of a disabled collection, so queueing one here would answer
+    // "queued" for work that never runs and leave the wallet view waiting on it forever. Holdings
+    // that are already indexed answered "ready" above: the switch stops ingest, it does not hide
+    // what a wallet owns.
+    if (isDisabledCollection(collection)) {
+      return {
+        chainId: item.chainId,
+        contractAddress: item.contractAddress,
+        tokenId: item.tokenId,
+        ownerAddress: validatedPayload.ownerAddress,
+        discoveryStatus: "failed" as const,
+        queuedJobId: null,
+        jobId: null,
+        token: null,
+        collection,
+        message: collectionDisabledMessage
       };
     }
 

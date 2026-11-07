@@ -3,6 +3,7 @@ import { refreshMediaJobSchema } from "@nft-platform/queue";
 import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
 import { buildApiSuccessResponse } from "../../../../../lib/api-response";
 import { buildValidationErrorResponse, buildValidationIssues, safeParseJsonRequestBody } from "../../../../../lib/api-validation";
+import { guardCollectionNotDisabled } from "../../../../../lib/collection-status-guard";
 import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { enqueueRefreshMediaJob } from "../../../../../lib/queue";
 import { persistQueueBackedJobRecord } from "../../../../../services/jobs/queue-job-service";
@@ -26,6 +27,15 @@ const postHandler = withAuthenticatedRoute(["refresh:media"], async ({ auth }) =
   }
 
   const validatedPayload = validatedPayloadResult.data;
+  const disabledGuardResult = await guardCollectionNotDisabled({
+    chainId: validatedPayload.chainId,
+    contractAddress: validatedPayload.contractAddress
+  });
+
+  if (!disabledGuardResult.ok) {
+    return disabledGuardResult.response;
+  }
+
   const timestamp = new Date();
   const database = getWebMongoDatabase();
   const queuedJob = await enqueueRefreshMediaJob(validatedPayload);

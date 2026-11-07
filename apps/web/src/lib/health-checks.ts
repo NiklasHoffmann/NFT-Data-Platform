@@ -1,5 +1,6 @@
 import process from "node:process";
 import { HeadBucketCommand } from "@aws-sdk/client-s3";
+import { listWorkerHeartbeats } from "@nft-platform/db";
 import {
   createStorageClientCandidates,
   isStorageEndpointUnreachableError
@@ -16,7 +17,51 @@ export type DependencyHealth = {
   message: string | null;
 };
 
+/**
+ * Reports what background work is actually running, which is deliberately not part of the health
+ * verdict. Chain indexing being off is a configuration, not a fault - an instance fed through the
+ * discover endpoints runs that way on purpose. But an instance where it is off by accident looks
+ * healthy from every other angle, which is why the state is reported rather than left implicit.
+ */
+export type BackgroundHealth = {
+  liveWorkerCount: number;
+  chainIndexingEnabled: boolean;
+  metadataSweepEnabled: boolean;
+};
+
 const HEALTH_PROBE_TIMEOUT_MS = 2_500;
+
+/**
+ * Matches the staleness window used by the operations view: the worker reports every 30 seconds,
+ * so two missed writes are tolerated before it counts as gone.
+ */
+const WORKER_STALE_AFTER_MS = 120_000;
+
+export async function readBackgroundHealth(): Promise<BackgroundHealth> {
+  try {
+    const heartbeats = await withTimeout(
+      listWorkerHeartbeats({ database: getWebMongoDatabase() }),
+      HEALTH_PROBE_TIMEOUT_MS,
+      "worker-heartbeat"
+    );
+    const staleBefore = Date.now() - WORKER_STALE_AFTER_MS;
+    const liveWorkers = heartbeats.filter((heartbeat) => heartbeat.lastSeenAt.getTime() >= staleBefore);
+
+    return {
+      liveWorkerCount: liveWorkers.length,
+      chainIndexingEnabled: liveWorkers.some((worker) => worker.chainIndexingEnabled),
+      metadataSweepEnabled: liveWorkers.some((worker) => worker.metadataSweepEnabled)
+    };
+  } catch (error) {
+    logger.warn("health_probe_worker_heartbeat_failed", { error });
+
+    return {
+      liveWorkerCount: 0,
+      chainIndexingEnabled: false,
+      metadataSweepEnabled: false
+    };
+  }
+}
 
 export async function probeMongoHealth(): Promise<DependencyHealth> {
   const startedAt = Date.now();

@@ -150,16 +150,59 @@ async function dispatchJob(
 ): Promise<Record<string, unknown>> {
   switch (queueName) {
     case queueNames.refreshCollection:
-      return handleRefreshCollection(refreshCollectionJobSchema.parse(job.data), context);
+      return runUnlessCollectionIsDisabled(refreshCollectionJobSchema.parse(job.data), context, (payload) =>
+        handleRefreshCollection(payload, context)
+      );
     case queueNames.refreshToken:
-      return handleRefreshToken(refreshTokenJobSchema.parse(job.data), context);
+      return runUnlessCollectionIsDisabled(refreshTokenJobSchema.parse(job.data), context, (payload) =>
+        handleRefreshToken(payload, context)
+      );
     case queueNames.refreshMedia:
-      return handleRefreshMedia(refreshMediaJobSchema.parse(job.data), context, job);
+      return runUnlessCollectionIsDisabled(refreshMediaJobSchema.parse(job.data), context, (payload) =>
+        handleRefreshMedia(payload, context, job)
+      );
     case queueNames.reindexRange:
-      return handleReindexRange(reindexRangeJobSchema.parse(job.data), context);
+      return runUnlessCollectionIsDisabled(reindexRangeJobSchema.parse(job.data), context, (payload) =>
+        handleReindexRange(payload, context)
+      );
     default:
       throw new Error(`Unsupported queue name: ${queueName}`);
   }
+}
+
+/**
+ * A disabled collection must not cost anything, and jobs for it reach the worker from more places
+ * than the public refresh endpoints: the metadata sweep queues them on a timer, read-path
+ * revalidation queues them per stale token read, and the chain indexing loop queues reindex ranges.
+ * Guarding here rather than at every one of those call sites keeps the switch in one place.
+ *
+ * The job is reported as done, not failed. Skipping is the intended outcome, and a failure would
+ * retry and then sit in the failed list as if something had gone wrong.
+ */
+async function runUnlessCollectionIsDisabled<TPayload extends { chainId: number; contractAddress: string }>(
+  payload: TPayload,
+  context: JobProcessingContext,
+  run: (payload: TPayload) => Promise<Record<string, unknown>>
+): Promise<Record<string, unknown>> {
+  const collection = await findCollectionByIdentity({
+    database: context.database,
+    chainId: payload.chainId,
+    contractAddress: payload.contractAddress
+  });
+
+  if (collection?.syncStatus === "disabled") {
+    console.log("[worker] skipped job for disabled collection", {
+      chainId: payload.chainId,
+      contractAddress: payload.contractAddress
+    });
+
+    return {
+      skipped: true,
+      reason: "collection_disabled"
+    };
+  }
+
+  return run(payload);
 }
 
 function hasRemainingAttempts(job: Job): boolean {

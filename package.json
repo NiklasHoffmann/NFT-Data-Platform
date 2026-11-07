@@ -19,6 +19,7 @@
     "smoke:fixtures": "tsx scripts/smoke-validated-fixtures.ts",
     "smoke:reindex-erc721": "tsx scripts/smoke-reindex-erc721.ts",
     "smoke:discover-regressions": "tsx scripts/smoke-discover-regressions.ts",
+    "smoke:collection-lifecycle": "tsx scripts/smoke-collection-lifecycle.ts",
     "dev:web": "npm run dev --workspace @nft-platform/web",
     "dev:worker": "npm run dev --workspace @nft-platform/worker",
     "build": "npm run build --workspaces --if-present",

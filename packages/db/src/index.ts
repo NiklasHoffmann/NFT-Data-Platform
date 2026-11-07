@@ -24,6 +24,7 @@ import {
   syncStatusSchema,
   type ApiClientStatus,
   type AuditRateLimitDecision,
+  type CollectionIdentity,
   type InteractiveMediaType,
   type JobStatus,
   type JobType,
@@ -46,7 +47,8 @@ export const mongoCollectionNames = {
   mediaAssets: "media_assets",
   jobs: "jobs",
   apiClients: "api_clients",
-  auditLogs: "audit_logs"
+  auditLogs: "audit_logs",
+  workerHeartbeats: "worker_heartbeats"
 } as const;
 
 export type MongoCollectionName =
@@ -225,6 +227,23 @@ export type AuditLogDocument = {
   rateLimitDecision: AuditRateLimitDecision;
 };
 
+/**
+ * What a worker process reports about itself while it is alive. The web service has no way to read
+ * the worker's environment - separate container, separate variables - so the background switches
+ * only become visible through what the worker writes down here.
+ */
+export type WorkerHeartbeatDocument = {
+  _id: ObjectId;
+  instanceId: string;
+  startedAt: Date;
+  lastSeenAt: Date;
+  chainIndexingEnabled: boolean;
+  chainIndexingPollIntervalMs: number;
+  chainIndexingAllowlistSize: number;
+  metadataSweepEnabled: boolean;
+  metadataSweepIntervalMs: number;
+};
+
 export type MongoCollections = {
   collections: Collection<CollectionDocument>;
   tokens: Collection<TokenDocument>;
@@ -235,6 +254,7 @@ export type MongoCollections = {
   jobs: Collection<JobDocument>;
   apiClients: Collection<ApiClientDocument>;
   auditLogs: Collection<AuditLogDocument>;
+  workerHeartbeats: Collection<WorkerHeartbeatDocument>;
 };
 
 export type BootstrapApiClientSeed = {
@@ -275,6 +295,13 @@ const auditLogRetentionSeconds = 30 * 24 * 60 * 60;
  * bumping `updatedAt` on every state transition.
  */
 const jobRetentionSeconds = 7 * 24 * 60 * 60;
+
+/**
+ * A worker that stopped reporting is gone. The record is kept well past the point where the health
+ * view calls it stale, so an operator can still see that a worker existed and when it was last
+ * seen, rather than finding an empty list after a crash.
+ */
+const workerHeartbeatRetentionSeconds = 24 * 60 * 60;
 
 type MongoSchema = Record<string, unknown>;
 
@@ -344,6 +371,10 @@ const objectIdField: MongoSchema = {
 
 const dateField: MongoSchema = {
   bsonType: "date"
+};
+
+const booleanField: MongoSchema = {
+  bsonType: "bool"
 };
 
 const nonNegativeNumberField: MongoSchema = {
@@ -721,6 +752,27 @@ const collectionDefinitions: Record<MongoCollectionName, CollectionDefinition> =
     },
     validationAction: "error",
     validationLevel: "moderate"
+  },
+  worker_heartbeats: {
+    validator: {
+      $jsonSchema: {
+        bsonType: "object",
+        required: ["instanceId", "startedAt", "lastSeenAt", "chainIndexingEnabled", "metadataSweepEnabled"],
+        properties: {
+          _id: objectIdField,
+          instanceId: nonEmptyStringField(),
+          startedAt: dateField,
+          lastSeenAt: dateField,
+          chainIndexingEnabled: booleanField,
+          chainIndexingPollIntervalMs: positiveNumberField,
+          chainIndexingAllowlistSize: nonNegativeNumberField,
+          metadataSweepEnabled: booleanField,
+          metadataSweepIntervalMs: positiveNumberField
+        }
+      }
+    },
+    validationAction: "error",
+    validationLevel: "moderate"
   }
 };
 
@@ -790,6 +842,10 @@ const collectionIndexes: Record<MongoCollectionName, IndexModel[]> = {
   audit_logs: [
     { key: { clientId: 1, timestamp: -1 }, name: "client_timestamp_desc" },
     { key: { timestamp: -1 }, name: "timestamp_desc", expireAfterSeconds: auditLogRetentionSeconds }
+  ],
+  worker_heartbeats: [
+    { key: { instanceId: 1 }, name: "uniq_instance_id", unique: true },
+    { key: { lastSeenAt: -1 }, name: "last_seen_ttl", expireAfterSeconds: workerHeartbeatRetentionSeconds }
   ]
 };
 
@@ -903,7 +959,8 @@ export function getMongoCollections(database: Db): MongoCollections {
     mediaAssets: database.collection<MediaAssetDocument>(mongoCollectionNames.mediaAssets),
     jobs: database.collection<JobDocument>(mongoCollectionNames.jobs),
     apiClients: database.collection<ApiClientDocument>(mongoCollectionNames.apiClients),
-    auditLogs: database.collection<AuditLogDocument>(mongoCollectionNames.auditLogs)
+    auditLogs: database.collection<AuditLogDocument>(mongoCollectionNames.auditLogs),
+    workerHeartbeats: database.collection<WorkerHeartbeatDocument>(mongoCollectionNames.workerHeartbeats)
   };
 }
 
@@ -1287,31 +1344,97 @@ export async function findTokensByIds(params: {
     .toArray();
 }
 
+/**
+ * Every collection write goes through here, which makes it the one place where a disabled
+ * collection can be protected from being silently switched back on. Refresh and reindex both write
+ * `syncStatus: "active"` unconditionally, so without this guard an operator's shutdown would be
+ * undone by the next refresh - and refreshes are also triggered internally by the metadata sweep
+ * and by read-path revalidation, not just by an explicit API call.
+ *
+ * The status filter sits in the upsert itself rather than in a preceding read so that a shutdown
+ * landing between read and write cannot slip through. A disabled document fails the filter, the
+ * upsert then attempts an insert, and the unique index on (chainId, contractAddress) turns that
+ * into a duplicate key error - which is the signal to write everything except the status.
+ */
 export async function upsertCollection(
   database: Db,
   document: Omit<CollectionDocument, "_id" | "holderCount" | "previewTokenId">
 ): Promise<void> {
   const { createdAt, ...updatableFields } = document;
+  const { syncStatus, ...fieldsWithoutSyncStatus } = updatableFields;
+  const contractAddress = normalizeContractAddress(document.contractAddress);
+  const identity = {
+    chainId: document.chainId,
+    contractAddress
+  };
 
-  await getMongoCollections(database).collections.updateOne(
+  try {
+    await getMongoCollections(database).collections.updateOne(
+      {
+        ...identity,
+        syncStatus: { $ne: "disabled" }
+      },
+      {
+        $set: {
+          ...updatableFields,
+          contractAddress,
+          updatedAt: document.updatedAt
+        },
+        $setOnInsert: {
+          createdAt,
+          holderCount: 0,
+          previewTokenId: null
+        }
+      },
+      { upsert: true }
+    );
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) {
+      throw error;
+    }
+
+    await getMongoCollections(database).collections.updateOne(identity, {
+      $set: {
+        ...fieldsWithoutSyncStatus,
+        contractAddress,
+        updatedAt: document.updatedAt
+      }
+    });
+  }
+}
+
+/**
+ * Sets the lifecycle status of a single collection and returns the stored document, so the caller
+ * can report the transition it actually caused rather than the one it asked for.
+ */
+export async function setCollectionSyncStatus(params: {
+  database: Db;
+  chainId: number;
+  contractAddress: string;
+  syncStatus: SyncStatus;
+  updatedAt: Date;
+}): Promise<CollectionDocument | null> {
+  return getMongoCollections(params.database).collections.findOneAndUpdate(
     {
-      chainId: document.chainId,
-      contractAddress: normalizeContractAddress(document.contractAddress)
+      chainId: params.chainId,
+      contractAddress: normalizeContractAddress(params.contractAddress)
     },
     {
       $set: {
-        ...updatableFields,
-        contractAddress: normalizeContractAddress(document.contractAddress),
-        updatedAt: document.updatedAt
-      },
-      $setOnInsert: {
-        createdAt,
-        holderCount: 0,
-        previewTokenId: null
+        syncStatus: params.syncStatus,
+        updatedAt: params.updatedAt
       }
     },
-    { upsert: true }
+    { returnDocument: "after" }
   );
+}
+
+/**
+ * The collections collection carries a single unique index, on (chainId, contractAddress), so a
+ * duplicate key error here can only mean that the identity already exists.
+ */
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === 11000;
 }
 
 export async function findTokenByIdentity(params: {
@@ -1601,12 +1724,14 @@ export async function listStaleTokensForRefresh(params: {
   staleBefore: Date;
   failureRetryBefore: Date;
   limit: number;
+  excludedCollections?: CollectionIdentity[];
 }): Promise<StaleTokenCandidate[]> {
   const query: Filter<TokenDocument> = {
     $or: [
       buildStaleClause({ metadataStatus: { $ne: "failed" } }, "lastMetadataFetchAt", params.staleBefore),
       buildStaleClause({ metadataStatus: "failed" }, "lastMetadataFetchAt", params.failureRetryBefore)
-    ]
+    ],
+    ...buildCollectionExclusionClause(params.excludedCollections)
   };
 
   return getMongoCollections(params.database)
@@ -1629,8 +1754,12 @@ export async function listStaleCollectionsForRefresh(params: {
   database: Db;
   staleBefore: Date;
   limit: number;
+  excludedCollections?: CollectionIdentity[];
 }): Promise<StaleCollectionCandidate[]> {
-  const query = buildStaleClause({}, "lastCollectionMetadataFetchAt", params.staleBefore) as Filter<CollectionDocument>;
+  const query = {
+    ...buildStaleClause({}, "lastCollectionMetadataFetchAt", params.staleBefore),
+    ...buildCollectionExclusionClause(params.excludedCollections)
+  } as Filter<CollectionDocument>;
 
   return getMongoCollections(params.database)
     .collections.find<StaleCollectionCandidate>(query, {
@@ -1645,6 +1774,42 @@ export async function listStaleCollectionsForRefresh(params: {
     .sort({ lastCollectionMetadataFetchAt: 1, _id: 1 })
     .limit(params.limit)
     .toArray();
+}
+
+/**
+ * The staleness sweep would otherwise keep refreshing metadata and media for collections an
+ * operator has switched off. Those documents never age out, so without an exclusion they sit at the
+ * front of the oldest-first sweep order forever and consume the whole batch.
+ */
+export async function listDisabledCollectionIdentities(params: {
+  database: Db;
+}): Promise<CollectionIdentity[]> {
+  const disabledCollections = await getMongoCollections(params.database)
+    .collections.find(
+      { syncStatus: "disabled" },
+      { projection: { _id: 0, chainId: 1, contractAddress: 1 } }
+    )
+    .toArray();
+
+  return disabledCollections.map((collection) => ({
+    chainId: collection.chainId,
+    contractAddress: collection.contractAddress
+  }));
+}
+
+function buildCollectionExclusionClause(
+  excludedCollections: CollectionIdentity[] | undefined
+): Record<string, unknown> {
+  if (!excludedCollections || excludedCollections.length === 0) {
+    return {};
+  }
+
+  return {
+    $nor: excludedCollections.map((identity) => ({
+      chainId: identity.chainId,
+      contractAddress: normalizeContractAddress(identity.contractAddress)
+    }))
+  };
 }
 
 /**
@@ -2993,6 +3158,65 @@ export async function ensureBootstrapApiClient(
     createdAt: timestamp,
     updatedAt: timestamp
   });
+}
+
+/**
+ * Records that this worker process is alive and what background work it is configured to do.
+ *
+ * The switches themselves live in the worker's environment, which the web service cannot read.
+ * Without this record an instance with chain indexing turned off looks exactly like a healthy one:
+ * the worker runs, the API answers, and nothing is ever indexed.
+ */
+export async function upsertWorkerHeartbeat(params: {
+  database: Db;
+  instanceId: string;
+  startedAt: Date;
+  lastSeenAt: Date;
+  chainIndexingEnabled: boolean;
+  chainIndexingPollIntervalMs: number;
+  chainIndexingAllowlistSize: number;
+  metadataSweepEnabled: boolean;
+  metadataSweepIntervalMs: number;
+}): Promise<void> {
+  const { database, instanceId, startedAt, ...heartbeatFields } = params;
+
+  await getMongoCollections(database).workerHeartbeats.updateOne(
+    { instanceId },
+    {
+      $set: heartbeatFields,
+      $setOnInsert: { startedAt }
+    },
+    { upsert: true }
+  );
+}
+
+export async function listWorkerHeartbeats(params: {
+  database: Db;
+  limit?: number;
+}): Promise<WorkerHeartbeatDocument[]> {
+  return getMongoCollections(params.database)
+    .workerHeartbeats.find({})
+    .sort({ lastSeenAt: -1, _id: -1 })
+    .limit(params.limit ?? 10)
+    .toArray();
+}
+
+export async function deleteWorkerHeartbeat(params: {
+  database: Db;
+  instanceId: string;
+}): Promise<void> {
+  await getMongoCollections(params.database).workerHeartbeats.deleteOne({
+    instanceId: params.instanceId
+  });
+}
+
+export function serializeWorkerHeartbeatDocument(document: WorkerHeartbeatDocument) {
+  return {
+    ...document,
+    _id: document._id.toHexString(),
+    startedAt: document.startedAt.toISOString(),
+    lastSeenAt: document.lastSeenAt.toISOString()
+  };
 }
 
 export function serializeObjectId(value: ObjectId | null | undefined): string | null {

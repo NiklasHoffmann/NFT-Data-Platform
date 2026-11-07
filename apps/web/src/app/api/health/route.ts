@@ -4,7 +4,8 @@ import { getWebRuntimeConfig } from "../../../lib/env";
 import {
   probeMongoHealth,
   probeRedisHealth,
-  probeStorageHealth
+  probeStorageHealth,
+  readBackgroundHealth
 } from "../../../lib/health-checks";
 import {
   attachPublicRateLimitHeaders,
@@ -32,10 +33,9 @@ export async function GET(request: NextRequest) {
     return rateLimitedResponse;
   }
 
-  const checks = await Promise.all([
-    probeMongoHealth(),
-    probeRedisHealth(),
-    probeStorageHealth()
+  const [checks, background] = await Promise.all([
+    Promise.all([probeMongoHealth(), probeRedisHealth(), probeStorageHealth()]),
+    readBackgroundHealth()
   ]);
   const allHealthy = checks.every((check) => check.status === "ok");
 
@@ -44,7 +44,8 @@ export async function GET(request: NextRequest) {
       ok: allHealthy,
       service: "web",
       status: allHealthy ? "ok" : "degraded",
-      checks
+      checks,
+      background
     },
     {
       status: allHealthy ? 200 : 503
