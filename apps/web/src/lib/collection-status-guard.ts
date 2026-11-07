@@ -1,6 +1,21 @@
-import { findCollectionByIdentity } from "@nft-platform/db";
+import { findCollectionByIdentity, type CollectionDocument } from "@nft-platform/db";
 import { getWebMongoDatabase } from "./mongodb";
 import { buildApiErrorResponse } from "./api-response";
+
+/**
+ * Said the same way by the `409` of the refresh endpoints and by the per-item result of the
+ * discover endpoints, so whoever reads it learns the same thing wherever the switch stopped work.
+ */
+export const collectionDisabledMessage =
+  "This collection is disabled and is not being indexed. Re-enable it through POST /api/v1/collections/{chainId}/{contractAddress}/status before requesting work for it.";
+
+/**
+ * The discover endpoints answer per requested item instead of rejecting the whole call, so they
+ * need the check without the response. They already hold the collection documents they looked up.
+ */
+export function isDisabledCollection(collection: Pick<CollectionDocument, "syncStatus"> | null): boolean {
+  return collection?.syncStatus === "disabled";
+}
 
 /**
  * The worker skips every job that belongs to a disabled collection, so accepting one here would
@@ -20,7 +35,7 @@ export async function guardCollectionNotDisabled(params: {
     contractAddress: params.contractAddress
   });
 
-  if (collection?.syncStatus !== "disabled") {
+  if (!isDisabledCollection(collection)) {
     return { ok: true };
   }
 
@@ -28,8 +43,7 @@ export async function guardCollectionNotDisabled(params: {
     ok: false,
     response: buildApiErrorResponse({
       error: "collection_disabled",
-      message:
-        "This collection is disabled and is not being indexed. Re-enable it through POST /api/v1/collections/{chainId}/{contractAddress}/status before requesting work for it.",
+      message: collectionDisabledMessage,
       status: 409
     })
   };

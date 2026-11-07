@@ -10,6 +10,7 @@ import {
 } from "../../../../../lib/api-validation";
 import { withAuthenticatedRoute } from "../../../../../lib/api-auth";
 import { guardContractAddress } from "../../../../../lib/contract-address-guard";
+import { collectionDisabledMessage, isDisabledCollection } from "../../../../../lib/collection-status-guard";
 import { serializeEnrichedCollections } from "../../../../../lib/collection-response";
 import { getWebMongoDatabase } from "../../../../../lib/mongodb";
 import { enqueueRefreshTokenJob } from "../../../../../lib/queue";
@@ -89,6 +90,24 @@ const postHandler = withAuthenticatedRoute(["tokens:read", "refresh:token"], asy
         jobId: null,
         token,
         collection
+      };
+    }
+
+    // The worker skips every job of a disabled collection, so queueing one here would answer
+    // "queued" for work that never runs and leave the caller rendering an indexing state forever.
+    // Tokens that are already indexed answered "ready" above: the switch stops ingest, it does
+    // not hide data.
+    if (isDisabledCollection(collection)) {
+      return {
+        chainId: item.chainId,
+        contractAddress: item.contractAddress,
+        tokenId: item.tokenId,
+        discoveryStatus: "failed" as const,
+        queuedJobId: null,
+        jobId: null,
+        token: null,
+        collection,
+        message: collectionDisabledMessage
       };
     }
 

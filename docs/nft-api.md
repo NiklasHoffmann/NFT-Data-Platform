@@ -111,6 +111,7 @@ Behavior:
 - already indexed NFTs are returned immediately as `discoveryStatus: ready`
 - missing NFTs are queued as refresh jobs and returned as `discoveryStatus: queued`
 - entries whose contract cannot be validated come back as `discoveryStatus: failed` with a `message`
+- entries of a disabled collection come back the same way, and nothing is queued for them
 
 Example:
 
@@ -220,6 +221,7 @@ Behavior:
 - already indexed NFTs are returned immediately as `discoveryStatus: ready`
 - missing NFTs are queued as refresh jobs and returned as `discoveryStatus: queued`
 - entries whose contract cannot be validated come back as `discoveryStatus: failed` with a `message`
+- entries of a disabled collection come back the same way, and nothing is queued for them
 
 Example:
 
