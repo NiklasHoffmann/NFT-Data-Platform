@@ -7,7 +7,17 @@ export type LoadLocalEnvFilesParams = {
   includeProcessCwd?: boolean;
 };
 
+/**
+ * Loads the local baseline into `process.env`, in the order `.env.example` then `.env`, so a
+ * missing local value still has the documented default behind it.
+ *
+ * What was already in the real environment when this runs always wins: a shell export, a Coolify
+ * variable, a CI secret. Without that, a script pointed at a deployed instance through the
+ * environment would be silently redirected back at the local stack by the `.env` sitting next to
+ * it — the values are valid, the signature verifies, and the request reaches the wrong system.
+ */
 export function loadLocalEnvFiles(params: LoadLocalEnvFilesParams = {}): void {
+  const environmentProvidedKeys = new Set(Object.keys(process.env));
   const roots: string[] = [];
 
   if (params.includeProcessCwd ?? true) {
@@ -21,12 +31,12 @@ export function loadLocalEnvFiles(params: LoadLocalEnvFilesParams = {}): void {
   const uniqueRoots = [...new Set(roots.map((root) => resolve(root)))];
 
   for (const root of uniqueRoots) {
-    applyEnvFile(resolve(root, ".env.example"), false);
-    applyEnvFile(resolve(root, ".env"), true);
+    applyEnvFile(resolve(root, ".env.example"), false, environmentProvidedKeys);
+    applyEnvFile(resolve(root, ".env"), true, environmentProvidedKeys);
   }
 }
 
-function applyEnvFile(filePath: string, override: boolean): void {
+function applyEnvFile(filePath: string, override: boolean, environmentProvidedKeys: Set<string>): void {
   if (!existsSync(filePath)) {
     return;
   }
@@ -50,6 +60,12 @@ function applyEnvFile(filePath: string, override: boolean): void {
     const key = normalizedLine.slice(0, separatorIndex).trim();
 
     if (!key) {
+      continue;
+    }
+
+    // `override` only decides whether a file beats a value an earlier file in this run put there.
+    // It never reaches a value that came from the environment itself.
+    if (environmentProvidedKeys.has(key)) {
       continue;
     }
 

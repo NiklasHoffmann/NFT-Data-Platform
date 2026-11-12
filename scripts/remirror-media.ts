@@ -3,21 +3,10 @@ import process from "node:process";
 import { loadLocalEnvFiles } from "@nft-platform/runtime";
 import { z } from "zod";
 
-// loadLocalEnvFiles applies .env with override, which would replace the values an
-// operator exports in their shell. This script usually runs against a deployed API
-// while .env holds the local stack, so an explicit shell value has to win: snapshot
-// what was already set, load the files for everything else, then restore.
-const explicitEnv = new Map(
-  ["API_BASE_URL", "API_BOOTSTRAP_CLIENT_ID", "API_BOOTSTRAP_KEY", "API_BOOTSTRAP_SECRET"]
-    .map((name): [string, string | undefined] => [name, process.env[name]])
-    .filter((entry): entry is [string, string] => entry[1] !== undefined)
-);
-
+// This script usually runs against a deployed API while .env holds the local stack, so the
+// API_BASE_URL and credentials exported in the shell have to win. loadLocalEnvFiles guarantees
+// that for every script, which is why the snapshot-and-restore this file used to carry is gone.
 loadLocalEnvFiles();
-
-for (const [name, value] of explicitEnv) {
-  process.env[name] = value;
-}
 
 const booleanFlags = new Set(["dry-run", "help"]);
 
